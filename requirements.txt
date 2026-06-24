@@ -1,0 +1,4 @@
+requests
+pyserial
+pynmea2
+urllib3
