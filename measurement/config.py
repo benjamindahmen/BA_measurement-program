@@ -98,12 +98,28 @@ class IperfConfig:
 
 
 @dataclass(frozen=True)
+class GpioConfig:
+    button_gpio: int
+    button_bounce_time_s: float
+    stop_hold_time_s: float
+    shutdown_hold_time_s: float
+
+
+@dataclass(frozen=True)
+class StatusLedConfig:
+    enabled: bool
+    gpio: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     cellulink: CellulinkConfig
     reference_gnss: ReferenceGnssConfig
     measurement: MeasurementConfig
     ping: PingConfig
     iperf: IperfConfig
+    gpio: GpioConfig
+    status_led: StatusLedConfig
     config_path: Path
 
     def redacted_json(self) -> str:
@@ -169,6 +185,22 @@ def load_config(path: str | Path) -> AppConfig:
             parallel_streams=_int(parser.get("Iperf", "PARALLEL_STREAMS", fallback="1"), 1),
             timeout_s=_int(parser.get("Iperf", "TIMEOUT_S", fallback="30"), 30),
             fallback_ports=_csv_ints(parser.get("Iperf", "FALLBACK_PORTS", fallback="5202,5203,5204,5205")),
+        ),
+        gpio=GpioConfig(
+            button_gpio=_int(parser.get("GPIO", "BUTTON_GPIO", fallback="17"), 17),
+            button_bounce_time_s=_float(
+                parser.get("GPIO", "BUTTON_BOUNCE_TIME_S", fallback="0.2"), 0.2
+            ),
+            stop_hold_time_s=_float(
+                parser.get("GPIO", "STOP_HOLD_TIME_S", fallback="3.0"), 3.0
+            ),
+            shutdown_hold_time_s=_float(
+                parser.get("GPIO", "SHUTDOWN_HOLD_TIME_S", fallback="8.0"), 8.0
+            ),
+        ),
+        status_led=StatusLedConfig(
+            enabled=_bool(parser.get("StatusLED", "ENABLED", fallback="true"), True),
+            gpio=_int(parser.get("StatusLED", "GPIO", fallback="27"), 27),
         ),
         config_path=config_path,
     )

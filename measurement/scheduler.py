@@ -42,9 +42,9 @@ class MeasurementScheduler:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._sample_thread.join(timeout=5)
+        self._sample_thread.join()
         if self._network_thread.is_alive():
-            self._network_thread.join(timeout=5)
+            self._network_thread.join()
 
     def wait_forever(self) -> None:
         while not self._stop_event.is_set():
@@ -105,6 +105,9 @@ class MeasurementScheduler:
             error = {"source": source, "message": str(exc)}
             errors.append(error)
             self.database.log_error(self.run_id, source, str(exc))
+            self.database.log_system_event(
+                self.run_id, "API_ERROR", str(exc), {"source": source}
+            )
             return None
 
     def _network_loop(self) -> None:
@@ -122,18 +125,25 @@ class MeasurementScheduler:
 
     def _run_ping_once(self) -> None:
         ref = self.gnss_reader.snapshot()
-        result = run_ping(self.config.ping, ref)
+        result = run_ping(self.config.ping, ref, self._stop_event)
+        if self._stop_event.is_set() and result.get("error_text") == "cancelled":
+            return
         result["run_id"] = self.run_id
         self.database.insert_ping_result(result)
         if not result["success"]:
             self.database.log_error(self.run_id, "ping", result.get("error_text") or "ping failed")
+            self.database.log_system_event(
+                self.run_id, "PING_ERROR", result.get("error_text") or "ping failed"
+            )
 
     def _run_iperf_pair(self) -> None:
         for direction in ("upload", "download"):
             if self._stop_event.is_set():
                 return
             ref = self.gnss_reader.snapshot()
-            result = run_iperf(self.config.iperf, direction, ref)
+            result = run_iperf(self.config.iperf, direction, ref, self._stop_event)
+            if self._stop_event.is_set() and result.get("error_text") == "cancelled":
+                return
             result["run_id"] = self.run_id
             self.database.insert_iperf_result(result)
             if not result["success"]:
@@ -142,4 +152,14 @@ class MeasurementScheduler:
                     f"iperf_{direction}",
                     result.get("error_text") or f"iperf {direction} failed",
                     {"server": result.get("server"), "port": result.get("port")},
+                )
+                self.database.log_system_event(
+                    self.run_id,
+                    "IPERF_ERROR",
+                    result.get("error_text") or f"iperf {direction} failed",
+                    {
+                        "direction": direction,
+                        "server": result.get("server"),
+                        "port": result.get("port"),
+                    },
                 )

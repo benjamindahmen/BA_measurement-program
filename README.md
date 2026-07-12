@@ -1,6 +1,10 @@
 # Raspberry Pi Measurement System
 
-Dieses Projekt erfasst waehrend mobiler Messfahrten zyklisch Daten eines Cellulink-Mobilfunkrouters, Referenz-GNSS-Daten eines Waveshare MAX-M8Q GNSS-HATs sowie Ping- und iPerf3-Messwerte. Die Ergebnisse werden fuer die spaetere wissenschaftliche Auswertung in einer SQLite-Datenbank gespeichert.
+Dieses Projekt erfasst während mobiler Messfahrten zyklisch Daten eines
+Cellulink-Mobilfunkrouters, Referenz-GNSS-Daten eines Waveshare MAX-M8Q
+GNSS-HATs sowie Ping- und iPerf3-Messwerte. Die Ergebnisse werden in einer
+SQLite-Datenbank gespeichert. Das System ist für den Headless-Betrieb im
+Fahrzeug ohne Tastatur, Maus und Bildschirm ausgelegt.
 
 ## Projektstruktur
 
@@ -9,85 +13,308 @@ measurement_system/
 ├── main.py
 ├── config.ini
 ├── requirements.txt
-├── README.md
+├── measurement_system.service
+├── install_service.sh
+├── commit_data.sh
+├── exports/
+│   └── run_000001_2026-07-12T12-00-00-000Z.sqlite.gz
 ├── measurement/
-│   ├── __init__.py
-│   ├── config.py
+│   ├── controller.py
+│   ├── gpio_control.py
+│   ├── status_led.py
+│   ├── hardware_test.py
 │   ├── database.py
-│   ├── cellulink_auth.py
-│   ├── cellulink_api.py
-│   ├── gnss_reference.py
-│   ├── iperf_test.py
-│   ├── ping_test.py
 │   ├── scheduler.py
-│   └── models.py
+│   └── ...
 └── data/
-    └── .gitkeep
+    ├── measurement.sqlite
+    └── system.log
 ```
 
-## Installation auf dem Raspberry Pi
+## Installation über GitHub auf dem Raspberry Pi
 
-Python 3.10 oder neuer wird empfohlen.
+Auf dem Raspberry Pi muss keine eigene „GitHub-Anwendung“ installiert werden.
+Benötigt werden Git und ein SSH-Schlüssel. Für den Headless-Betrieb wird ein
+schreibberechtigter **Deploy Key** empfohlen: Er berechtigt den Pi nur für
+dieses eine Repository.
+
+Das Repository sollte **privat** sein, weil die Datenbank Positions- und
+Mobilfunkmessdaten enthalten kann.
+
+### 1. Systempakete installieren
+
+Auf dem Raspberry Pi:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip iperf3
-cd measurement_system
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+sudo apt install -y \
+    git openssh-client sqlite3 \
+    python3 python3-venv python3-pip \
+    iperf3
 ```
 
-## Serielle Schnittstelle aktivieren
+### 2. SSH-Schlüssel auf dem Pi erzeugen
 
-Den MAX-M8Q GNSS-HAT ueber die Raspberry-Pi-UART-Schnittstelle betreiben:
+Als der Linux-Benutzer ausführen, unter dem später auch der Messdienst läuft:
+
+```bash
+ssh-keygen -t ed25519 -C "raspberry-pi-measurement"
+```
+
+Als Speicherort den vorgeschlagenen Pfad `~/.ssh/id_ed25519` übernehmen. Soll
+der Pi ohne Benutzereingabe pushen können, muss die Passphrase leer bleiben.
+Die private Datei `~/.ssh/id_ed25519` darf niemals kopiert oder in Git
+committet werden.
+
+Öffentlichen Schlüssel anzeigen:
+
+```bash
+cat ~/.ssh/id_ed25519.pub
+```
+
+Den kompletten Inhalt kopieren und auf GitHub beim Repository
+`benjamindahmen/BA_measurement-program` eintragen:
+
+1. `Settings`
+2. `Deploy keys`
+3. `Add deploy key`
+4. Titel beispielsweise `Raspberry Pi Messsystem`
+5. Schlüssel einfügen
+6. **Allow write access** aktivieren
+7. `Add key`
+
+Ein Deploy Key ist normalerweise nur lesend. `Allow write access` ist
+erforderlich, damit der Pi die Datenbank pushen kann. Details stehen in der
+[GitHub-Dokumentation zu Deploy Keys](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys).
+
+Verbindung testen:
+
+```bash
+ssh -T git@github.com
+```
+
+Beim ersten Verbindungsaufbau den angezeigten GitHub-Fingerprint prüfen und
+bestätigen. Die Meldung, dass GitHub keinen Shell-Zugriff bereitstellt, ist
+normal und bedeutet bei erfolgreicher Authentifizierung keinen Fehler.
+
+### 3. Repository klonen und Git konfigurieren
+
+```bash
+cd ~
+git clone git@github.com:benjamindahmen/BA_measurement-program.git measurement_system
+cd measurement_system
+
+git config user.name "Raspberry Pi Measurement System"
+git config user.email "raspberry-pi@local"
+```
+
+Durch die SSH-URL verwendet auch `git push` automatisch den Deploy Key. Eine
+allgemeine Anleitung zum Klonen findet sich in der
+[GitHub-Dokumentation](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository?platform=linux).
+
+### 4. Messdienst installieren
+
+```bash
+chmod +x install_service.sh commit_data.sh
+./install_service.sh
+```
+
+Das Installationsskript legt die virtuelle Umgebung an, installiert die
+Python-Abhängigkeiten, passt die systemd-Unit an Projektverzeichnis und
+Benutzer an und startet den Dienst.
+
+```bash
+sudo systemctl status measurement_system.service
+journalctl -u measurement_system.service -f
+```
+
+Der Dienst startet nach Verfügbarkeit des Netzwerks und wird nach einem Fehler
+automatisch neu gestartet. Standardausgabe und Fehlerausgabe landen zusätzlich
+in journald.
+
+### 5. Spätere Softwareupdates vom Repository laden
+
+Vor einer neuen Messfahrt und nur bei sauberem Git-Arbeitsverzeichnis:
+
+```bash
+cd ~/measurement_system
+sudo systemctl stop measurement_system.service
+git pull --ff-only
+./install_service.sh
+```
+
+`--ff-only` verhindert, dass Git auf dem Pi unbemerkt einen Merge-Commit
+erzeugt. Wird das Update abgelehnt, zuerst `git status` prüfen und keine
+Datenbankdatei überschreiben.
+
+## Serielle Schnittstelle für den MAX-M8Q
 
 ```bash
 sudo raspi-config
 ```
 
-Unter `Interface Options` die serielle Schnittstelle aktivieren. Die Login-Shell ueber Serial sollte deaktiviert werden, die Hardware-UART-Schnittstelle aktiviert. Danach neu starten:
+Unter `Interface Options` die serielle Schnittstelle aktivieren. Die
+Login-Shell über Serial muss deaktiviert, die Hardware-UART aktiviert werden.
+Die Beispielkonfiguration nutzt `/dev/serial0` mit 9600 Baud. GPIO14 und GPIO15
+sind dadurch belegt und dürfen nicht für den Taster verwendet werden.
 
-```bash
-sudo reboot
+## Taster und Status-LED
+
+Der Start-/Stop-Taster wird zwischen **GPIO17 (physischer Pin 11)** und **GND**
+angeschlossen. Der interne Pull-up ist aktiv; ein externer Pull-up-Widerstand
+ist nicht erforderlich.
+
+Die optionale Status-LED wird von **GPIO27 (physischer Pin 13)** über einen
+geeigneten Vorwiderstand gegen **GND** angeschlossen. LED niemals ohne
+Vorwiderstand betreiben.
+
+Die Pins und Zeitgrenzen stehen in `config.ini`:
+
+```ini
+[GPIO]
+BUTTON_GPIO=17
+BUTTON_BOUNCE_TIME_S=0.2
+STOP_HOLD_TIME_S=3.0
+SHUTDOWN_HOLD_TIME_S=8.0
+
+[StatusLED]
+ENABLED=true
+GPIO=27
 ```
 
-Die Beispielkonfiguration nutzt `/dev/serial0` mit `9600` Baud.
+Bedienung:
+
+- kurzer Tastendruck im Zustand `IDLE`: neue Messfahrt starten
+- mindestens 3 Sekunden halten: laufende Messfahrt sauber beenden
+- mindestens 8 Sekunden halten: Messfahrt beenden und Raspberry Pi
+  herunterfahren
+
+Beim Halten werden die Schwellwerte unmittelbar ausgewertet. Während einer
+Messung führt ein achtsekündiger Druck deshalb nach drei Sekunden zuerst den
+sauberen Messstopp und anschließend das Herunterfahren aus.
+
+Die LED zeigt den Zustand an:
+
+- `IDLE`: langsames Blinken
+- `STARTING`: schnelles Blinken
+- `RUNNING`: dauerhaft an
+- `STOPPING`: dreimaliges kurzes Blinken
+- `ERROR`: dauerhaft schnelles Blinken
+
+Alle Zustandswechsel werden unabhängig von der LED in `data/system.log`
+protokolliert.
 
 ## Konfiguration
 
-Alle Einstellungen liegen in `config.ini`.
+Alle Einstellungen liegen in `config.ini`. Besonders relevant sind:
 
-Wichtige Felder:
+- `[Cellulink]`: Routeradresse, Zugangsdaten und TLS-Prüfung
+- `[ReferenceGNSS]`: UART-Port, Baudrate und Timeout
+- `[Measurement]`: SQLite-Pfad und Metadaten der Messfahrt
+- `[Ping]` und `[Iperf]`: Netzwerkziele, Intervalle und Timeouts
+- `[GPIO]` und `[StatusLED]`: Pins und Bedienzeiten
 
-- `[Cellulink] IP_ADDRESS`: IP-Adresse des Cellulink-Routers.
-- `[Cellulink] USER` und `PASSWORD`: Login-Daten fuer den Router.
-- `[Cellulink] VERIFY_TLS`: TLS-Pruefung. `false` unterdrueckt Zertifikatswarnungen und ist nur fuer Testumgebungen geeignet.
-- `[Measurement] DATABASE_PATH`: Zielpfad der SQLite-Datei.
-- `[Ping]`: Ziel, Intervall, Paketanzahl und Timeout fuer Ping.
-- `[Iperf]`: Server, Ports, Datenmenge und Timeout fuer iPerf3.
+Access Tokens bleiben ausschließlich im Speicher. In
+`measurement_runs.config_json` wird das Routerpasswort redigiert gespeichert.
 
-Access Tokens werden nur im Speicher gehalten und nicht in die Datenbank oder Konsole geschrieben. In `measurement_runs.config_json` wird das Passwort redigiert gespeichert.
+## Headless-Betrieb
 
-## Start
+Nach dem Boot startet systemd das Programm automatisch. Es bleibt zunächst im
+Zustand `IDLE`; eine Messung beginnt erst durch einen kurzen Tastendruck. Der
+1-Hz-Messloop läuft getrennt vom GPIO-Eventhandling und vom 10-s-Testloop für
+Ping und iPerf. Längere Netzwerkaufrufe blockieren daher weder den Taster noch
+die zyklische Messwerterfassung.
+
+Für Entwicklung und Fehlersuche kann das Programm ohne GPIO gestartet werden:
 
 ```bash
-cd measurement_system
 source .venv/bin/activate
-python main.py --config config.ini
+python main.py --no-gpio --start-now
 ```
 
-Das Programm fuehrt zuerst einen Reachability-Check des Cellulink durch, meldet sich per OAuth2 an, startet den GNSS-Reader und legt einen neuen Messlauf in SQLite an. Mit `Ctrl+C` wird der Messlauf sauber beendet und `end_time_system_utc` gesetzt.
+`Ctrl+C` beendet dabei die Messung sauber. Für den normalen Fahrzeugbetrieb
+wird kein Tastaturereignis benötigt.
 
-## Datenbank
+## Testmodus mit Monitor und Tastatur
 
-Die SQLite-Datei wird automatisch angelegt. Standardpfad:
+Für Inbetriebnahme und Fehlersuche auf Raspberry Pi OS Lite gibt es einen
+separaten Shell-Testmodus. Er ist für einen angeschlossenen Monitor und eine
+Tastatur gedacht und startet keine normale Messfahrt. Dadurch können einzelne
+Hardwareteile geprüft werden, ohne dass alle Komponenten angeschlossen sein
+müssen.
+
+Vor dem Test den normalen Messdienst stoppen, damit UART, GPIO und API-Zugriffe
+nicht parallel benutzt werden:
+
+```bash
+cd ~/measurement_system
+sudo systemctl stop measurement_system.service
+source .venv/bin/activate
+```
+
+Interaktives Menü starten:
+
+```bash
+python main.py --test
+```
+
+Das Menü bietet:
+
+- keine Hardware, nur Shell/Tastatur
+- nur Taster
+- nur Referenz-GNSS
+- nur Cellulink
+- Referenz-GNSS und Cellulink
+
+Während laufender Tests beendet `q` + `Enter` den Test. `Ctrl+C` funktioniert
+ebenfalls. Wenn der Tastertest aktiv ist, werden erkannte Ereignisse direkt in
+der Shell angezeigt:
+
+- `SHORT_PRESS`
+- `STOP_HOLD`
+- `SHUTDOWN_HOLD`
+
+Direkte Aufrufe ohne Menü:
+
+```bash
+# nur Shell/Tastatur, keine Hardware
+python main.py --test --test-hardware none
+
+# nur Taster, läuft bis q + Enter
+python main.py --test --test-hardware none --test-button --test-seconds 0
+
+# nur Referenz-GNSS für 60 Sekunden
+python main.py --test --test-hardware gnss --test-seconds 60
+
+# nur Cellulink-Erreichbarkeit, Login und API-Endpunkte
+python main.py --test --test-hardware cellulink
+
+# Referenz-GNSS und Cellulink, zusätzlich mit Taster
+python main.py --test --test-hardware both --test-button --test-seconds 60
+```
+
+Der GNSS-Test öffnet den in `config.ini` eingestellten Port, liest NMEA-Daten
+und zeigt einmal pro Sekunde an, ob RMC/GGA-Daten empfangen wurden, ob ein
+gültiger Fix vorliegt und welche Position/Satellitenzahl erkannt wurde.
+
+Der Cellulink-Test prüft Erreichbarkeit, Login und die relevanten API-Endpunkte.
+Das Passwort und der Access Token werden nicht ausgegeben.
+
+Nach dem Test kann der Dienst wieder gestartet werden:
+
+```bash
+sudo systemctl start measurement_system.service
+```
+
+## Datenbank und Ereignisse
+
+Standardpfad:
 
 ```text
 data/measurement.sqlite
 ```
 
-Enthaltene Tabellen:
+Enthalten sind unter anderem:
 
 - `measurement_runs`
 - `startup_snapshots`
@@ -95,15 +322,94 @@ Enthaltene Tabellen:
 - `ping_results`
 - `iperf_results`
 - `error_log`
+- `system_events`
 
-Die Tabellen speichern sowohl robuste Extraktionsspalten als auch die vollstaendigen JSON-Rohantworten des Cellulink. Einzelne API-, Ping- oder iPerf-Fehler werden protokolliert und brechen die laufende Messfahrt nicht ab.
+`system_events` enthält Programm- und Service-Starts, Tasterereignisse,
+Messungsstart und -ende, Shutdown-Anforderungen sowie GPIO-, API-, GNSS-,
+Ping- und iPerf-Fehler. SQLite-Zugriffe aus den Threads werden durch eine
+gemeinsame Sperre serialisiert.
 
-## Hinweise zu iPerf3
+## Messdaten über GitHub abholen
 
-Der Default-Server ist `iperf3.moji.fr` auf Port `5201`. Wenn dieser Port belegt oder nicht erreichbar ist, werden die konfigurierten Fallback-Ports versucht. Oeffentliche iPerf3-Server sind nicht vollstaendig kontrollierbar; Verfuegbarkeit, Auslastung und Betreiberbedingungen sollten in der Bachelorarbeit als Randbedingung dokumentiert werden.
+Die laufende SQLite-Datenbank unter `data/measurement.sqlite` wird nicht direkt
+versioniert. Das wäre bei mehrstündigen Fahrten über mehrere Wochen ungünstig,
+weil Git jede neue Version dieser Binärdatei dauerhaft in der Historie behält.
+Stattdessen bleibt die große Arbeitsdatenbank lokal auf dem Pi. Für GitHub
+werden pro Messfahrt einzelne komprimierte Exportdateien unter `exports/`
+erzeugt.
 
-## Betriebshinweise
+Nach der Fahrt zuerst die Messung mit dem dreisekündigen Tastendruck beenden.
+Den Pi anschließend mit einem Netzwerk verbinden und per SSH anmelden. Im
+Projektverzeichnis genügt:
 
-- Der 1-Hz-Messloop laeuft getrennt von Ping und iPerf3, damit lange Netzwerk-Tests die zyklische Erfassung nicht blockieren.
-- Die GNSS-Referenzzeit stammt aus gueltigen RMC/GGA-Saetzen des MAX-M8Q. Zusaetzlich werden immer System-UTC und `time.monotonic_ns()` gespeichert.
-- Bei `VERIFY_TLS=false` werden TLS-Warnungen unterdrueckt. Das ist praktisch fuer Labor- und Testumgebungen, sollte aber nicht als sichere Produktivkonfiguration gelten.
+```bash
+cd ~/measurement_system
+./commit_data.sh
+```
+
+Das Skript führt in dieser Reihenfolge aus:
+
+1. systemd-Dienst anhalten, falls er läuft
+2. SQLite-WAL vollständig in `data/measurement.sqlite` übernehmen
+3. noch nicht exportierte Messfahrten anhand ihrer `run_id` erkennen
+4. pro Messfahrt eine eigene Datei `exports/run_000001_....sqlite.gz` erzeugen
+5. ausschließlich neue Exportdateien unter `exports/` stagen
+6. Commit mit UTC-Zeitstempel erzeugen
+7. Commit zum aktuellen Branch auf GitHub pushen
+8. Messdienst wieder starten
+
+`system.log`, Zugangsdaten und andere lokale Dateien werden dabei nicht
+committet. Niemals `git add .` auf dem Pi verwenden, sondern für manuelle
+Commits immer nur die Exportdateien auswählen:
+
+```bash
+git add exports/*.sqlite.gz
+git commit -m "Messdatenexport YYYY-MM-DD"
+git push origin HEAD
+```
+
+Auf dem Auswertungsrechner können die neuen Daten danach geladen werden:
+
+```bash
+git pull --ff-only
+```
+
+Wurde der Export ohne Internetverbindung bereits lokal committet, kann der
+ausstehende Commit später bei vorhandener Verbindung manuell gepusht werden:
+
+```bash
+cd ~/measurement_system
+git push origin HEAD
+```
+
+### Wichtige Einschränkung für SQLite-Dateien
+
+SQLite-Dateien sind Binärdateien. Git speichert bei Änderungen neue
+Dateiversionen; eine immer weiter wachsende `data/measurement.sqlite` würde das
+Repository deshalb bei zwei Wochen Messbetrieb unnötig aufblasen. Darum ist
+`data/measurement.sqlite` in `.gitignore` ausgeschlossen.
+
+Die Exportdateien sind ebenfalls SQLite-Datenbanken, aber jeweils nur für eine
+einzelne Messfahrt und zusätzlich mit gzip komprimiert. Das ist für GitHub
+deutlich besser geeignet. GitHub warnt ab 50 MiB Dateigröße und blockiert
+reguläre Git-Dateien über 100 MiB. Das Upload-Skript prüft diese Grenzen pro
+Exportdatei. Für einzelne Fahrten, die trotzdem größer werden, sollte Git LFS
+oder eine separate Dateiablage verwendet werden. Siehe
+[GitHubs Hinweise zu großen Dateien](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github).
+
+Exportdateien können auf dem Auswertungsrechner entpackt werden:
+
+```bash
+gzip -dk exports/run_000001_2026-07-12T12-00-00-000Z.sqlite.gz
+sqlite3 exports/run_000001_2026-07-12T12-00-00-000Z.sqlite
+```
+
+Wenn `git push` wegen neuer Remote-Commits abgelehnt wird, niemals mit
+`--force` pushen. Zuerst die Codeänderungen sichern beziehungsweise auf einem
+anderen Rechner zusammenführen; binäre SQLite-Konflikte kann Git nicht
+automatisch auflösen.
+
+> Die Spannungsversorgung niemals während einer laufenden Messung einfach
+> trennen. Dadurch können Einträge unvollständig bleiben oder das Dateisystem
+> beschädigt werden. Zum Ausschalten den Taster mindestens acht Sekunden
+> gedrückt halten.

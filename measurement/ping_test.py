@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import threading
 import time
 from typing import Any
 
 from .config import PingConfig
 from .models import GnssState, utc_now_iso
+from .process_control import run_cancellable
 
 
 _PACKET_RE = re.compile(
@@ -16,7 +17,11 @@ _PACKET_RE = re.compile(
 _RTT_RE = re.compile(r"(?:rtt|round-trip).*=\s*([0-9.]+)/([0-9.]+)/([0-9.]+)")
 
 
-def run_ping(config: PingConfig, ref_gnss: GnssState) -> dict[str, Any]:
+def run_ping(
+    config: PingConfig,
+    ref_gnss: GnssState,
+    stop_event: threading.Event | None = None,
+) -> dict[str, Any]:
     start_ns = time.monotonic_ns()
     command = [
         "ping",
@@ -27,17 +32,25 @@ def run_ping(config: PingConfig, ref_gnss: GnssState) -> dict[str, Any]:
         config.target,
     ]
     try:
-        completed = subprocess.run(
+        completed = run_cancellable(
             command,
-            capture_output=True,
-            text=True,
             timeout=config.timeout_s * max(config.count, 1) + 5,
-            check=False,
+            stop_event=stop_event,
         )
         raw_output = (completed.stdout or "") + (completed.stderr or "")
         parsed = _parse_ping(raw_output)
-        success = completed.returncode == 0 and (parsed.get("received") or 0) > 0
-        error_text = None if success else f"ping exited with code {completed.returncode}"
+        success = (
+            not completed.cancelled
+            and not completed.timed_out
+            and completed.returncode == 0
+            and (parsed.get("received") or 0) > 0
+        )
+        if completed.cancelled:
+            error_text = "cancelled"
+        elif completed.timed_out:
+            error_text = "ping timed out"
+        else:
+            error_text = None if success else f"ping exited with code {completed.returncode}"
     except Exception as exc:
         raw_output = ""
         parsed = {}

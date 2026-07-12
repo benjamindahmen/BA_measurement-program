@@ -1,21 +1,29 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import threading
 import time
 from typing import Any
 
 from .config import IperfConfig
 from .models import GnssState, utc_now_iso
+from .process_control import run_cancellable
 
 
-def run_iperf(config: IperfConfig, direction: str, ref_gnss: GnssState) -> dict[str, Any]:
+def run_iperf(
+    config: IperfConfig,
+    direction: str,
+    ref_gnss: GnssState,
+    stop_event: threading.Event | None = None,
+) -> dict[str, Any]:
     bytes_requested = config.bytes_download if direction == "download" else config.bytes_upload
     ports = [config.port] + [port for port in config.fallback_ports if port != config.port]
     last_result: dict[str, Any] | None = None
     for port in ports:
-        result = _run_single(config, direction, bytes_requested, port, ref_gnss)
+        result = _run_single(config, direction, bytes_requested, port, ref_gnss, stop_event)
         if result["success"]:
+            return result
+        if result.get("error_text") == "cancelled":
             return result
         last_result = result
     return last_result or _base_result(config, direction, bytes_requested, config.port, ref_gnss)
@@ -27,6 +35,7 @@ def _run_single(
     bytes_requested: str,
     port: int,
     ref_gnss: GnssState,
+    stop_event: threading.Event | None,
 ) -> dict[str, Any]:
     start_utc = utc_now_iso()
     start_ns = time.monotonic_ns()
@@ -49,19 +58,23 @@ def _run_single(
     result["timestamp_system_utc_start"] = start_utc
     result["timestamp_monotonic_ns_start"] = start_ns
     try:
-        completed = subprocess.run(
+        completed = run_cancellable(
             command,
-            capture_output=True,
-            text=True,
             timeout=config.timeout_s,
-            check=False,
+            stop_event=stop_event,
         )
         result["timestamp_system_utc_end"] = utc_now_iso()
         result["timestamp_monotonic_ns_end"] = time.monotonic_ns()
         raw = completed.stdout or completed.stderr or ""
         result["raw_json"] = raw
         payload = _load_json(raw)
-        if completed.returncode == 0 and payload is not None and "error" not in payload:
+        if (
+            not completed.cancelled
+            and not completed.timed_out
+            and completed.returncode == 0
+            and payload is not None
+            and "error" not in payload
+        ):
             result["success"] = 1
             result["bitrate_bps"] = _bitrate(payload, direction)
             result["retransmits"] = _retransmits(payload)
@@ -69,7 +82,12 @@ def _run_single(
         else:
             result["success"] = 0
             api_error = payload.get("error") if isinstance(payload, dict) else None
-            result["error_text"] = api_error or f"iperf3 exited with code {completed.returncode}"
+            if completed.cancelled:
+                result["error_text"] = "cancelled"
+            elif completed.timed_out:
+                result["error_text"] = "iperf3 timed out"
+            else:
+                result["error_text"] = api_error or f"iperf3 exited with code {completed.returncode}"
     except Exception as exc:
         result["timestamp_system_utc_end"] = utc_now_iso()
         result["timestamp_monotonic_ns_end"] = time.monotonic_ns()

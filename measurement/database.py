@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -149,6 +150,16 @@ class MeasurementDatabase:
                     message TEXT NOT NULL,
                     details_json TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS system_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER,
+                    timestamp_system_utc TEXT NOT NULL,
+                    timestamp_monotonic_ns INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    message TEXT,
+                    details_json TEXT
+                );
                 """
             )
 
@@ -216,6 +227,30 @@ class MeasurementDatabase:
                 VALUES (?, ?, ?, ?, ?)
                 """,
                 (run_id, utc_now_iso(), source, message, json_dumps(details) if details is not None else None),
+            )
+
+    def log_system_event(
+        self,
+        run_id: int | None,
+        event_type: str,
+        message: str | None = None,
+        details: Any = None,
+    ) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """
+                INSERT INTO system_events
+                (run_id, timestamp_system_utc, timestamp_monotonic_ns, event_type, message, details_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    utc_now_iso(),
+                    time.monotonic_ns(),
+                    event_type,
+                    message,
+                    json_dumps(details) if details is not None else None,
+                ),
             )
 
     def close(self) -> None:

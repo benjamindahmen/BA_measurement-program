@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
-from measurement.cellulink_api import CellulinkApiClient
-from measurement.cellulink_auth import CellulinkAuthenticator
 from measurement.config import load_config
-from measurement.database import MeasurementDatabase
-from measurement.gnss_reference import ReferenceGnssReader
-from measurement.scheduler import MeasurementScheduler
 
 
 def main() -> int:
@@ -19,95 +15,123 @@ def main() -> int:
         default=str(Path(__file__).with_name("config.ini")),
         help="Path to config.ini",
     )
+    parser.add_argument(
+        "--no-gpio",
+        action="store_true",
+        help="Development mode without GPIO button and status LED",
+    )
+    parser.add_argument(
+        "--start-now",
+        action="store_true",
+        help="Start a measurement immediately (development/debugging)",
+    )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="Start interactive shell test mode instead of normal measurement service mode",
+    )
+    parser.add_argument(
+        "--test-hardware",
+        choices=["none", "gnss", "cellulink", "both"],
+        help="Hardware to test in --test mode; omit for interactive menu",
+    )
+    parser.add_argument(
+        "--test-button",
+        action="store_true",
+        help="Also test the GPIO button in --test mode",
+    )
+    parser.add_argument(
+        "--test-seconds",
+        type=int,
+        default=30,
+        help="Test duration in seconds; use 0 to run until q + Enter",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if args.test:
+        from measurement.hardware_test import run_hardware_test
+
+        return run_hardware_test(
+            config,
+            hardware=args.test_hardware,
+            use_button=args.test_button,
+            duration_s=args.test_seconds,
+        )
+
+    logger = _configure_logging(config.measurement.database_path.parent / "system.log")
+
+    from measurement.controller import MeasurementController
+    from measurement.database import MeasurementDatabase
+    from measurement.gpio_control import GpioButtonControl
+    from measurement.status_led import StatusLed
+
     database = MeasurementDatabase(config.measurement.database_path)
-    run_id: int | None = None
-    scheduler: MeasurementScheduler | None = None
-    gnss_reader: ReferenceGnssReader | None = None
+    status_led = StatusLed(config.status_led)
+    button: GpioButtonControl | None = None
+    controller: MeasurementController | None = None
     return_code = 0
 
+    database.log_system_event(None, "PROGRAM_START", "Messprogramm gestartet")
+    database.log_system_event(None, "SERVICE_START", "Boot-/Service-Start")
+    logger.info("Messprogramm gestartet; Datenbank: %s", config.measurement.database_path)
+
     try:
-        authenticator = CellulinkAuthenticator(config.cellulink)
-        print("Checking Cellulink reachability...")
-        authenticator.reachability_check()
-        print("Logging in to Cellulink...")
-        access_token = authenticator.login()
-
-        api_client = CellulinkApiClient(config.cellulink, access_token)
-        gnss_reader = ReferenceGnssReader(
-            config.reference_gnss.port,
-            config.reference_gnss.baudrate,
-            config.reference_gnss.read_timeout_s,
-            on_error=lambda message, details=None: database.log_error(run_id, "reference_gnss", message, details),
-        )
-        gnss_reader.start()
-
-        run_id = database.create_run(
-            config.measurement.route_id,
-            config.measurement.direction,
-            config.measurement.vehicle,
-            config.measurement.notes,
-            config.redacted_json(),
-        )
-        print(f"Measurement run {run_id} started. Database: {config.measurement.database_path}")
-
-        _save_startup_snapshots(database, run_id, api_client)
-
-        scheduler = MeasurementScheduler(config, database, run_id, api_client, gnss_reader)
-        scheduler.start()
-        scheduler.wait_forever()
+        if not args.no_gpio:
+            try:
+                status_led.start()
+            except Exception as exc:
+                logger.exception("Status-LED konnte nicht initialisiert werden")
+                database.log_error(None, "status_led", str(exc))
+                database.log_system_event(None, "GPIO_ERROR", str(exc), {"component": "status_led"})
+            button = GpioButtonControl(config.gpio)
+            try:
+                button.start()
+            except Exception as exc:
+                logger.exception("GPIO-Taster konnte nicht initialisiert werden")
+                database.log_error(None, "gpio_button", str(exc))
+                database.log_system_event(None, "GPIO_ERROR", str(exc), {"component": "button"})
+                raise
+        controller = MeasurementController(config, database, button, status_led, logger)
+        controller.run(start_immediately=args.start_now)
     except KeyboardInterrupt:
-        print("\nStopping measurement...")
+        logger.info("Ctrl+C im Entwicklungs-/Debugbetrieb erkannt")
     except Exception as exc:
-        print(f"Fatal error: {exc}", file=sys.stderr)
-        if run_id is not None:
-            database.log_error(run_id, "main", str(exc))
         return_code = 1
+        logger.exception("Fataler Programmfehler")
+        database.log_error(None, "main", str(exc))
+        database.log_system_event(None, "PROGRAM_ERROR", str(exc))
     finally:
-        if scheduler is not None:
-            scheduler.stop()
-        if gnss_reader is not None:
-            gnss_reader.stop()
-            gnss_reader.join(timeout=3)
-        if run_id is not None:
-            database.finish_run(run_id)
-            print(f"Measurement run {run_id} finished.")
+        if controller is not None:
+            try:
+                controller.close()
+            except Exception:
+                return_code = 1
+                logger.exception("Fehler bei der abschließenden Bereinigung")
+        if button is not None:
+            button.stop()
+        status_led.stop()
+        database.log_system_event(None, "PROGRAM_STOP", "Messprogramm beendet")
         database.close()
     return return_code
 
 
-def _save_startup_snapshots(database: MeasurementDatabase, run_id: int, api_client: CellulinkApiClient) -> None:
-    snapshots = [
-        (
-            f"/api/v1/cellular/modems/{api_client.config.modem_id}/profiles/{api_client.config.profile_id}/status",
-            "cellular_profile_status",
-            api_client.get_profile_status,
-        ),
-        (
-            f"/api/v1/cellular/modems/{api_client.config.modem_id}/profiles/{api_client.config.profile_id}/configuration",
-            "modem_profile_configuration",
-            api_client.get_profile_configuration,
-        ),
-        (
-            f"/api/v1/cellular/modems/{api_client.config.modem_id}/configuration",
-            "cellular_configuration",
-            api_client.get_modem_configuration,
-        ),
-        (
-            f"/api/v1/cellular/modems/{api_client.config.modem_id}/information",
-            "cellular_information",
-            api_client.get_modem_information,
-        ),
-    ]
-    for endpoint, snapshot_type, func in snapshots:
-        try:
-            payload = func()
-            database.save_startup_snapshot(run_id, endpoint, snapshot_type, True, payload=payload)
-        except Exception as exc:
-            database.save_startup_snapshot(run_id, endpoint, snapshot_type, False, error_text=str(exc))
-            database.log_error(run_id, f"startup_snapshot:{snapshot_type}", str(exc))
+def _configure_logging(log_path: Path) -> logging.Logger:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    logger = logging.getLogger("measurement_system")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(threadName)s %(message)s",
+        "%Y-%m-%dT%H:%M:%S%z",
+    )
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    return logger
 
 
 if __name__ == "__main__":

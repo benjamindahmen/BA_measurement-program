@@ -1,0 +1,15 @@
+[Unit]
+Description=Cellulink Mobile Measurement System
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/measurement_system
+ExecStart=/home/pi/measurement_system/.venv/bin/python /home/pi/measurement_system/main.py
+Restart=always
+RestartSec=5
+User=pi
+
+[Install]
+WantedBy=multi-user.target
