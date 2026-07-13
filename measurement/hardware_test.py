@@ -97,6 +97,12 @@ class ButtonProbe:
         except Exception as exc:
             print(f"FEHLER: GPIO-Taster konnte nicht gestartet werden: {exc}")
             print("Hinweis: Auf dem Pi muss gpiozero installiert sein und der Pin frei sein.")
+            if _looks_like_busy_pin(exc):
+                print("Der Pin ist vermutlich schon durch den Messdienst oder einen zweiten Testprozess belegt.")
+                print("Versuche:")
+                print("  sudo systemctl stop measurement_system.service")
+                print("  ps aux | grep '[p]ython.*main.py'")
+                print("Falls kein Prozess sichtbar ist: Raspberry Pi einmal neu starten.")
             return False
         print("OK: Taster aktiv. Kurzer Druck, 3-s-Halten und 8-s-Halten werden angezeigt.")
         return True
@@ -331,6 +337,11 @@ def _ask_yes_no(prompt: str, default: bool) -> bool:
     if not value:
         return default
     return value in {"j", "ja", "y", "yes"}
+
+
+def _looks_like_busy_pin(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ("in use", "busy", "belegt", "already", "reserv"))
 
 
 def _format_gnss(state: Any) -> str:

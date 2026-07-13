@@ -47,6 +47,7 @@ Auf dem Raspberry Pi:
 
 ```bash
 sudo apt update
+sudo apt upgrade
 sudo apt install -y \
     git openssh-client sqlite3 \
     python3 python3-venv python3-pip \
@@ -123,6 +124,12 @@ Das Installationsskript legt die virtuelle Umgebung an, installiert die
 Python-Abhängigkeiten, passt die systemd-Unit an Projektverzeichnis und
 Benutzer an und startet den Dienst.
 
+`gpiozero` für den Taster und die Status-LED wird dabei automatisch aus
+`requirements.txt` in die virtuelle Umgebung `.venv` installiert. Falls später
+die Meldung `gpiozero is not installed` erscheint, wurde die virtuelle Umgebung
+wahrscheinlich noch nicht aktualisiert oder das Programm wurde ohne `.venv`
+gestartet.
+
 ```bash
 sudo systemctl status measurement_system.service
 journalctl -u measurement_system.service -f
@@ -146,6 +153,16 @@ git pull --ff-only
 `--ff-only` verhindert, dass Git auf dem Pi unbemerkt einen Merge-Commit
 erzeugt. Wird das Update abgelehnt, zuerst `git status` prüfen und keine
 Datenbankdatei überschreiben.
+
+Nach Codeänderungen, die neue Python-Pakete benötigen, ist `./install_service.sh`
+wichtig, weil es auch `pip install -r requirements.txt` ausführt. Alternativ
+kann nur die virtuelle Umgebung aktualisiert werden:
+
+```bash
+cd ~/measurement_system
+source .venv/bin/activate
+pip install -r requirements.txt
+```
 
 ## Serielle Schnittstelle für den MAX-M8Q
 
@@ -251,6 +268,32 @@ cd ~/measurement_system
 sudo systemctl stop measurement_system.service
 source .venv/bin/activate
 ```
+
+Falls beim Tastertest `gpiozero is not installed` erscheint, fehlen die
+aktuellen Python-Abhängigkeiten in der virtuellen Umgebung. Dann einmal
+ausführen:
+
+```bash
+cd ~/measurement_system
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Falls stattdessen gemeldet wird, dass der GPIO-Pin belegt ist oder frei sein
+muss, läuft meistens noch der normale Messdienst oder ein zweiter Python-Test.
+Der Taster liegt standardmäßig auf GPIO17; dieser Pin kann nur von einem Prozess
+gleichzeitig verwendet werden. Dann prüfen:
+
+```bash
+cd ~/measurement_system
+sudo systemctl stop measurement_system.service
+systemctl is-active measurement_system.service
+ps aux | grep '[p]ython.*main.py'
+```
+
+Wenn noch ein alter Testprozess läuft, diesen beenden oder den Raspberry Pi neu
+starten. Danach den Tastertest erneut ausführen. Wenn bewusst ein anderer Pin
+verwendet werden soll, `BUTTON_GPIO` in `config.ini` anpassen.
 
 Interaktives Menü starten:
 
