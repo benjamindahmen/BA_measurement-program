@@ -373,6 +373,32 @@ Nach dem Test kann der Dienst wieder gestartet werden:
 sudo systemctl start measurement_system.service
 ```
 
+Falls beim Tastertest `gpiozero is not installed` erscheint, fehlen die
+aktuellen Python-Abhängigkeiten in der virtuellen Umgebung. Dann einmal
+ausführen:
+
+```bash
+cd ~/measurement_system
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Falls stattdessen gemeldet wird, dass der GPIO-Pin belegt ist oder frei sein
+muss, läuft meistens noch der normale Messdienst oder ein zweiter Python-Test.
+Der Taster liegt standardmäßig auf GPIO17; dieser Pin kann nur von einem Prozess
+gleichzeitig verwendet werden. Dann prüfen:
+
+```bash
+cd ~/measurement_system
+sudo systemctl stop measurement_system.service
+systemctl is-active measurement_system.service
+ps aux | grep '[p]ython.*main.py'
+```
+
+Wenn noch ein alter Testprozess läuft, diesen beenden oder den Raspberry Pi neu
+starten. Danach den Tastertest erneut ausführen. Wenn bewusst ein anderer Pin
+verwendet werden soll, `BUTTON_GPIO` in `config.ini` anpassen.
+
 ## Datenbank und Ereignisse
 
 Standardpfad:
