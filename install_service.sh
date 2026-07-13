@@ -21,8 +21,33 @@ elif [[ -f .venv/pyvenv.cfg ]]; then
     fi
 fi
 
+if ! "${PROJECT_DIR}/.venv/bin/python" - <<'PY'
+import sys
+
+has_system_dist_packages = any(
+    path.startswith("/usr/") and "dist-packages" in path
+    for path in sys.path
+)
+raise SystemExit(0 if has_system_dist_packages else 1)
+PY
+then
+    BACKUP_DIR=".venv_without_system_packages_$(date --utc +'%Y%m%dT%H%M%SZ')"
+    echo "Vorhandene .venv sieht keine Systempakete; verschiebe nach ${BACKUP_DIR}."
+    mv .venv "${BACKUP_DIR}"
+    python3 -m venv --system-site-packages .venv
+fi
+
 "${PROJECT_DIR}/.venv/bin/python" -m pip install --upgrade pip
 "${PROJECT_DIR}/.venv/bin/python" -m pip install -r requirements.txt
+
+if "${PROJECT_DIR}/.venv/bin/python" -c "import lgpio" >/dev/null 2>&1; then
+    echo "GPIO-Pin-Factory lgpio ist in .venv verfügbar."
+else
+    echo "Fehler: lgpio ist in .venv nicht verfügbar." >&2
+    echo "Installiere auf dem Raspberry Pi python3-lgpio und starte dieses Skript erneut:" >&2
+    echo "  sudo apt install -y python3-lgpio" >&2
+    exit 1
+fi
 
 TEMP_UNIT="$(mktemp)"
 trap 'rm -f "${TEMP_UNIT}"' EXIT
