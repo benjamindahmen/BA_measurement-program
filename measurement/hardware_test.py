@@ -97,6 +97,15 @@ class ButtonProbe:
         except Exception as exc:
             print(f"FEHLER: GPIO-Taster konnte nicht gestartet werden: {exc}")
             print("Hinweis: Auf dem Pi muss gpiozero installiert sein und der Pin frei sein.")
+            if _looks_like_missing_pin_factory(exc):
+                print("Die GPIO-Pin-Factory fehlt oder ist in der .venv nicht sichtbar.")
+                print("Installiere auf Raspberry Pi OS die empfohlene lgpio-Unterstützung:")
+                print("  sudo apt install -y python3-lgpio")
+                print("Danach im Projekt:")
+                print("  ./install_service.sh")
+                print("oder für den reinen Test:")
+                print("  source .venv/bin/activate")
+                print("  python -c \"import lgpio; print('lgpio ok')\"")
             if _looks_like_busy_pin(exc):
                 print("Der Pin ist vermutlich schon durch den Messdienst oder einen zweiten Testprozess belegt.")
                 print("Versuche:")
@@ -342,6 +351,11 @@ def _ask_yes_no(prompt: str, default: bool) -> bool:
 def _looks_like_busy_pin(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(marker in text for marker in ("in use", "busy", "belegt", "already", "reserv"))
+
+
+def _looks_like_missing_pin_factory(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in ("invalid argument", "pin factory", "no module named"))
 
 
 def _format_gnss(state: Any) -> str:

@@ -50,7 +50,7 @@ sudo apt update
 sudo apt upgrade
 sudo apt install -y \
     git openssh-client sqlite3 \
-    python3 python3-venv python3-pip \
+    python3 python3-venv python3-pip python3-lgpio \
     iperf3
 ```
 
@@ -129,6 +129,12 @@ Benutzer an und startet den Dienst.
 die Meldung `gpiozero is not installed` erscheint, wurde die virtuelle Umgebung
 wahrscheinlich noch nicht aktualisiert oder das Programm wurde ohne `.venv`
 gestartet.
+
+Für den tatsächlichen GPIO-Zugriff braucht `gpiozero` zusätzlich eine
+Pin-Factory. Auf Raspberry Pi OS wird dafür `python3-lgpio` über apt
+installiert. Das Installationsskript erstellt beziehungsweise aktualisiert
+`.venv` so, dass diese Systembibliothek auch innerhalb der virtuellen Umgebung
+sichtbar ist.
 
 ```bash
 sudo systemctl status measurement_system.service
@@ -277,6 +283,24 @@ ausführen:
 cd ~/measurement_system
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Falls Warnungen wie `Falling back from lgpio: No module named 'lgpio'` und
+anschließend `Invalid argument` erscheinen, fehlt nicht `gpiozero` selbst,
+sondern die GPIO-Pin-Factory. Dann:
+
+```bash
+sudo apt update
+sudo apt install -y python3-lgpio
+cd ~/measurement_system
+./install_service.sh
+```
+
+Für eine schnelle Kontrolle:
+
+```bash
+source .venv/bin/activate
+python -c "import lgpio; print('lgpio ok')"
 ```
 
 Falls stattdessen gemeldet wird, dass der GPIO-Pin belegt ist oder frei sein

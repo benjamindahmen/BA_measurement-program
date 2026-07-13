@@ -12,7 +12,13 @@ chmod +x "${PROJECT_DIR}/install_service.sh"
 chmod +x "${PROJECT_DIR}/commit_data.sh"
 
 if [[ ! -d .venv ]]; then
-    python3 -m venv .venv
+    python3 -m venv --system-site-packages .venv
+elif [[ -f .venv/pyvenv.cfg ]]; then
+    if grep -q "^include-system-site-packages = " .venv/pyvenv.cfg; then
+        sed -i "s/^include-system-site-packages = .*/include-system-site-packages = true/" .venv/pyvenv.cfg
+    else
+        echo "include-system-site-packages = true" >> .venv/pyvenv.cfg
+    fi
 fi
 
 "${PROJECT_DIR}/.venv/bin/python" -m pip install --upgrade pip
