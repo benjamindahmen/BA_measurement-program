@@ -200,10 +200,10 @@ Die LED zeigt den Zustand an:
 | Zustand | LED-Verhalten | Bedeutung |
 |---|---|---|
 | `IDLE` | langsames Blinken | System ist bereit, aber es läuft keine Messung |
-| `STARTING` | schnelles Blinken | Messung wird vorbereitet und gestartet |
+| `STARTING` | mittleres Blinken | Messung wird vorbereitet und Startbedingungen werden geprüft |
 | `RUNNING` | dauerhaft an | Messung läuft |
 | `STOPPING` | dreimaliges kurzes Blinken | Messung wird sauber beendet |
-| `ERROR` | dauerhaft schnelles Blinken | Fehlerzustand |
+| `ERROR` | sehr schnelles Blinken | Fehlerzustand |
 
 Alle Zustandswechsel werden unabhängig von der LED in `data/system.log`
 protokolliert.
@@ -215,19 +215,40 @@ Alle Einstellungen liegen in `config.ini`. Besonders relevant sind:
 - `[Cellulink]`: Routeradresse, Zugangsdaten und TLS-Prüfung
 - `[ReferenceGNSS]`: UART-Port, Baudrate und Timeout
 - `[Measurement]`: SQLite-Pfad und Metadaten der Messfahrt
+- `[Startup]`: Mobilfunk-Neuanmeldung und Startfreigabe
 - `[Ping]` und `[Iperf]`: Netzwerkziele, Intervalle und Timeouts
 - `[GPIO]` und `[StatusLED]`: Pins und Bedienzeiten
 
 Access Tokens bleiben ausschließlich im Speicher. In
 `measurement_runs.config_json` wird das Routerpasswort redigiert gespeichert.
 
+Die Startfreigabe wird über `[Startup]` gesteuert. Die Platzhalter
+`{modem_id}` und `{profile_id}` werden aus `[Cellulink]` eingesetzt:
+
+```ini
+[Startup]
+CELLULAR_RESET_ENABLED=true
+CELLULAR_DISCONNECT_METHOD=POST
+CELLULAR_DISCONNECT_PATH=/cellular/modems/{modem_id}/profiles/{profile_id}/disconnect
+CELLULAR_CONNECT_METHOD=POST
+CELLULAR_CONNECT_PATH=/cellular/modems/{modem_id}/profiles/{profile_id}/connect
+READY_TIMEOUT_S=180.0
+PING_COUNT=1
+```
+
 ## Headless-Betrieb
 
 Nach dem Boot startet systemd das Programm automatisch. Es bleibt zunächst im
 Zustand `IDLE`; eine Messung beginnt erst durch einen kurzen Tastendruck. Der
-1-Hz-Messloop läuft getrennt vom GPIO-Eventhandling und vom 10-s-Testloop für
-Ping und iPerf. Längere Netzwerkaufrufe blockieren daher weder den Taster noch
-die zyklische Messwerterfassung.
+Start bleibt im Zustand `STARTING`, bis das Mobilfunkprofil per API einmal ab-
+und wieder angemeldet wurde, Referenz-GNSS und Cellulink-GNSS jeweils einen Fix
+haben und ein einzelner Ping zum konfigurierten Ping-Ziel erfolgreich war. Erst
+danach wechselt die LED auf `RUNNING` und die zyklische Messwerterfassung
+beginnt.
+
+Der 1-Hz-Messloop läuft getrennt vom GPIO-Eventhandling und vom 10-s-Testloop
+für Ping und iPerf. Längere Netzwerkaufrufe blockieren daher weder den Taster
+noch die zyklische Messwerterfassung.
 
 Für Entwicklung und Fehlersuche kann das Programm ohne GPIO gestartet werden:
 

@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .config import AppConfig
-    from .gpio_control import GpioButtonControl
     from .gnss_reference import ReferenceGnssReader
     from .models import GnssState
 

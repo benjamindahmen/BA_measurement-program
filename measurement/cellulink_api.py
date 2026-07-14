@@ -52,6 +52,34 @@ class CellulinkApiClient:
     def get_gnss_information(self) -> dict[str, Any]:
         return self.get_json("/gnss")
 
+    def disconnect_cellular_profile(self, path_template: str, method: str = "POST") -> None:
+        self.request_action(method, path_template)
+
+    def connect_cellular_profile(self, path_template: str, method: str = "POST") -> None:
+        self.request_action(method, path_template)
+
+    def request_action(self, method: str, path_template: str, payload: Any = None) -> dict[str, Any] | None:
+        path = self._format_path(path_template)
+        endpoint = self._endpoint(path)
+        response = self.session.request(
+            method.upper(),
+            f"{self.config.base_url}{endpoint}",
+            json=payload,
+            timeout=self.timeout_s,
+        )
+        if response.status_code >= 400:
+            raise CellulinkApiError(_http_error(f"API {method.upper()} request failed", response, endpoint))
+        if not response.content:
+            return None
+        content_type = response.headers.get("Content-Type", "")
+        if "json" not in content_type.lower():
+            return None
+        try:
+            parsed = response.json()
+        except ValueError as exc:
+            raise CellulinkApiError(_http_error("API action response is not JSON", response, endpoint)) from exc
+        return parsed if isinstance(parsed, dict) else None
+
     def get_json(self, path: str) -> dict[str, Any]:
         endpoint = self._endpoint(path)
         response = self.session.get(f"{self.config.base_url}{endpoint}", timeout=self.timeout_s)
@@ -72,6 +100,12 @@ class CellulinkApiClient:
         if path.startswith(self.api_prefix):
             return path
         return f"{self.api_prefix}/{path.lstrip('/')}"
+
+    def _format_path(self, path_template: str) -> str:
+        return path_template.format(
+            modem_id=self.config.modem_id,
+            profile_id=self.config.profile_id,
+        )
 
 
 def _http_error(prefix: str, response: requests.Response, endpoint: str) -> str:

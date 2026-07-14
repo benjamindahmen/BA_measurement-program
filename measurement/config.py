@@ -112,6 +112,20 @@ class StatusLedConfig:
 
 
 @dataclass(frozen=True)
+class StartupConfig:
+    cellular_reset_enabled: bool
+    cellular_disconnect_method: str
+    cellular_disconnect_path: str
+    cellular_connect_method: str
+    cellular_connect_path: str
+    cellular_reset_settle_s: float
+    ready_timeout_s: float
+    check_interval_s: float
+    ping_count: int
+    ping_timeout_s: int
+
+
+@dataclass(frozen=True)
 class AppConfig:
     cellulink: CellulinkConfig
     reference_gnss: ReferenceGnssConfig
@@ -120,6 +134,7 @@ class AppConfig:
     iperf: IperfConfig
     gpio: GpioConfig
     status_led: StatusLedConfig
+    startup: StartupConfig
     config_path: Path
 
     def redacted_json(self) -> str:
@@ -201,6 +216,38 @@ def load_config(path: str | Path) -> AppConfig:
         status_led=StatusLedConfig(
             enabled=_bool(parser.get("StatusLED", "ENABLED", fallback="true"), True),
             gpio=_int(parser.get("StatusLED", "GPIO", fallback="27"), 27),
+        ),
+        startup=StartupConfig(
+            cellular_reset_enabled=_bool(
+                parser.get("Startup", "CELLULAR_RESET_ENABLED", fallback="true"), True
+            ),
+            cellular_disconnect_method=parser.get(
+                "Startup", "CELLULAR_DISCONNECT_METHOD", fallback="POST"
+            ).upper(),
+            cellular_disconnect_path=parser.get(
+                "Startup",
+                "CELLULAR_DISCONNECT_PATH",
+                fallback="/cellular/modems/{modem_id}/profiles/{profile_id}/disconnect",
+            ),
+            cellular_connect_method=parser.get(
+                "Startup", "CELLULAR_CONNECT_METHOD", fallback="POST"
+            ).upper(),
+            cellular_connect_path=parser.get(
+                "Startup",
+                "CELLULAR_CONNECT_PATH",
+                fallback="/cellular/modems/{modem_id}/profiles/{profile_id}/connect",
+            ),
+            cellular_reset_settle_s=_float(
+                parser.get("Startup", "CELLULAR_RESET_SETTLE_S", fallback="5.0"), 5.0
+            ),
+            ready_timeout_s=_float(
+                parser.get("Startup", "READY_TIMEOUT_S", fallback="180.0"), 180.0
+            ),
+            check_interval_s=_float(
+                parser.get("Startup", "CHECK_INTERVAL_S", fallback="2.0"), 2.0
+            ),
+            ping_count=_int(parser.get("Startup", "PING_COUNT", fallback="1"), 1),
+            ping_timeout_s=_int(parser.get("Startup", "PING_TIMEOUT_S", fallback="5"), 5),
         ),
         config_path=config_path,
     )

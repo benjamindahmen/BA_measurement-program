@@ -86,10 +86,18 @@ class StatusLed:
                     self._led.off()
                     self._stop_pattern_done.set()
                     timeout = 1.0
+            elif state == SystemState.ERROR:
+                phase_on = not phase_on
+                self._led.value = phase_on
+                timeout = 0.08
+            elif state == SystemState.STARTING:
+                phase_on = not phase_on
+                self._led.value = phase_on
+                timeout = 0.35
             else:
                 phase_on = not phase_on
                 self._led.value = phase_on
-                timeout = 1.0 if state == SystemState.IDLE else 0.2
+                timeout = 1.0
 
             self._changed.wait(timeout)
             self._changed.clear()
