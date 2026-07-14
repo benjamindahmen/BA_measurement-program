@@ -246,6 +246,17 @@ haben und ein einzelner Ping zum konfigurierten Ping-Ziel erfolgreich war. Erst
 danach wechselt die LED auf `RUNNING` und die zyklische Messwerterfassung
 beginnt.
 
+Der aktuelle Ablauf ist im systemd-Log sichtbar:
+
+```bash
+journalctl -u measurement_system.service -f
+systemctl status measurement_system.service
+```
+
+Das Log enthält unter anderem erkannte Tasterereignisse, Zustandswechsel und
+Statusmeldungen wie `STATUS state=STARTING action=Warte auf Fix von
+Referenz-GNSS`.
+
 Der 1-Hz-Messloop läuft getrennt vom GPIO-Eventhandling und vom 10-s-Testloop
 für Ping und iPerf. Längere Netzwerkaufrufe blockieren daher weder den Taster
 noch die zyklische Messwerterfassung.

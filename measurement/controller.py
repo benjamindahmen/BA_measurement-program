@@ -39,9 +39,11 @@ class MeasurementController:
         self.gnss_reader: ReferenceGnssReader | None = None
         self._exit_event = threading.Event()
         self._shutdown_command = shutdown_command or self._shutdown_host
+        self._last_status_action: str | None = None
 
     def run(self, start_immediately: bool = False) -> None:
         self._set_state(SystemState.IDLE)
+        self._report_status("Warte auf kurzen Tastendruck zum Starten")
         if start_immediately:
             self.start_measurement()
 
@@ -69,6 +71,9 @@ class MeasurementController:
             event.duration_s,
             self.state.value,
         )
+        self._report_status(
+            f"Taster erkannt: {event.event_type.value} nach {event.duration_s:.2f} s"
+        )
 
         if event.event_type == ButtonEventType.SHUTDOWN_HOLD:
             self.shutdown()
@@ -85,6 +90,7 @@ class MeasurementController:
             return
         self._set_state(SystemState.STARTING)
         try:
+            self._report_status("Lege neue Messfahrt in SQLite an")
             self.run_id = self.database.create_run(
                 self.config.measurement.route_id,
                 self.config.measurement.direction,
@@ -94,13 +100,16 @@ class MeasurementController:
             )
             self.logger.info("Messfahrt %s wird gestartet", self.run_id)
 
+            self._report_status("Prüfe Cellulink-Erreichbarkeit")
             authenticator = CellulinkAuthenticator(self.config.cellulink)
             authenticator.reachability_check()
+            self._report_status("Melde am Cellulink an")
             access_token = authenticator.login()
             api_client = CellulinkApiClient(self.config.cellulink, access_token)
 
             self._reset_cellular_connection(api_client)
 
+            self._report_status("Starte Referenz-GNSS-Reader")
             self.gnss_reader = ReferenceGnssReader(
                 self.config.reference_gnss.port,
                 self.config.reference_gnss.baudrate,
@@ -108,9 +117,11 @@ class MeasurementController:
                 on_error=self._on_gnss_error,
             )
             self.gnss_reader.start()
+            self._report_status("Speichere Startup-Snapshots")
             self._save_startup_snapshots(api_client)
             self._wait_until_ready(api_client)
 
+            self._report_status("Starte zyklische Messwerterfassung")
             self.scheduler = MeasurementScheduler(
                 self.config,
                 self.database,
@@ -121,6 +132,7 @@ class MeasurementController:
             self.scheduler.start()
             self.database.log_system_event(self.run_id, "MEASUREMENT_STARTED", "Messfahrt gestartet")
             self._set_state(SystemState.RUNNING)
+            self._report_status("Messung läuft")
         except Exception as exc:
             self.logger.exception("Messfahrt konnte nicht gestartet werden")
             self.database.log_error(self.run_id, "controller_start", str(exc))
@@ -136,6 +148,7 @@ class MeasurementController:
         if self.state not in {SystemState.RUNNING, SystemState.STARTING}:
             return
         self._set_state(SystemState.STOPPING)
+        self._report_status("Beende Messfahrt sauber")
         active_run_id = self.run_id
         try:
             self._cleanup_run(mark_finished=True)
@@ -148,8 +161,10 @@ class MeasurementController:
         self.database.log_system_event(active_run_id, "MEASUREMENT_STOPPED", "Messfahrt beendet")
         self.logger.info("Messfahrt %s wurde sauber beendet", active_run_id)
         self._set_state(SystemState.IDLE)
+        self._report_status("Warte auf kurzen Tastendruck zum Starten")
 
     def shutdown(self) -> None:
+        self._report_status("Shutdown per Taster angefordert")
         self.database.log_system_event(
             self.run_id,
             "SHUTDOWN_REQUESTED",
@@ -207,7 +222,9 @@ class MeasurementController:
 
     def _reset_cellular_connection(self, api_client: CellulinkApiClient) -> None:
         if not self.config.startup.cellular_reset_enabled:
+            self._report_status("Mobilfunk-Neuanmeldung ist deaktiviert")
             return
+        self._report_status("Melde Mobilfunkprofil per API ab")
         self.logger.info("Mobilfunkprofil wird per API abgemeldet")
         self.database.log_system_event(
             self.run_id,
@@ -218,7 +235,9 @@ class MeasurementController:
             self.config.startup.cellular_disconnect_path,
             self.config.startup.cellular_disconnect_method,
         )
+        self._report_status("Warte nach Mobilfunk-Abmeldung")
         time.sleep(max(self.config.startup.cellular_reset_settle_s, 0.0))
+        self._report_status("Melde Mobilfunkprofil per API wieder an")
         self.logger.info("Mobilfunkprofil wird per API wieder angemeldet")
         api_client.connect_cellular_profile(
             self.config.startup.cellular_connect_path,
@@ -234,11 +253,13 @@ class MeasurementController:
         deadline = time.monotonic() + max(self.config.startup.ready_timeout_s, 1.0)
         startup_ping_done = False
         last_status = ""
+        next_heartbeat = 0.0
 
         while time.monotonic() < deadline:
             ref_ready = self._reference_gnss_ready()
             cellulink_ready = self._cellulink_gnss_ready(api_client)
             if ref_ready and cellulink_ready and not startup_ping_done:
+                self._report_status(f"Führe Start-Ping zu {self.config.ping.target} aus", force=True)
                 startup_ping_done = self._run_startup_ping()
             if ref_ready and cellulink_ready and startup_ping_done:
                 self.database.log_system_event(
@@ -247,13 +268,24 @@ class MeasurementController:
                     "Referenz-GNSS, Cellulink-GNSS und Mobilfunk-Ping bereit",
                 )
                 self.logger.info("Startbedingungen erfüllt")
+                self._report_status("Startbedingungen erfüllt")
                 return
+
+            if not ref_ready:
+                action = "Warte auf Fix von Referenz-GNSS"
+            elif not cellulink_ready:
+                action = "Warte auf Fix von Cellulink-GNSS"
+            else:
+                action = f"Warte auf erfolgreichen Start-Ping zu {self.config.ping.target}"
 
             last_status = (
                 f"ref_gnss={ref_ready}, cellulink_gnss={cellulink_ready}, "
                 f"ping={startup_ping_done}"
             )
-            self.logger.info("Warte auf Startbedingungen: %s", last_status)
+            now = time.monotonic()
+            self._report_status(f"{action} ({last_status})", force=now >= next_heartbeat)
+            if now >= next_heartbeat:
+                next_heartbeat = now + 10.0
             time.sleep(max(self.config.startup.check_interval_s, 0.5))
 
         raise TimeoutError(f"Startbedingungen nicht rechtzeitig erfüllt: {last_status}")
@@ -359,6 +391,21 @@ class MeasurementController:
         self.state = state
         self.status_led.set_state(state)
         self.logger.info("Systemzustand: %s", state.value)
+        self.logger.info("STATUS state=%s action=Zustand gewechselt", state.value)
+
+    def _report_status(self, action: str, *, force: bool = False) -> None:
+        changed = action != self._last_status_action
+        if not force and not changed:
+            return
+        self._last_status_action = action
+        self.logger.info("STATUS state=%s action=%s", self.state.value, action)
+        if changed:
+            self.database.log_system_event(
+                self.run_id,
+                "STATUS",
+                action,
+                {"state": self.state.value},
+            )
 
     @staticmethod
     def _shutdown_host() -> None:
