@@ -13,13 +13,15 @@ if TYPE_CHECKING:
     from .models import GnssState
 
 
-HardwareMode = Literal["none", "gnss", "cellulink", "both"]
+HardwareMode = Literal["none", "gnss", "cellulink", "led", "both"]
+LedStateName = Literal["IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"]
 
 
 @dataclass
 class TestOptions:
     hardware: HardwareMode
     use_button: bool
+    led_state: LedStateName
     duration_s: int
 
 
@@ -27,13 +29,16 @@ def run_hardware_test(
     config: AppConfig,
     hardware: str | None = None,
     use_button: bool = False,
+    led_state: str | None = None,
     duration_s: int = 30,
 ) -> int:
-    options = _interactive_options(hardware, use_button, duration_s)
+    options = _interactive_options(hardware, use_button, led_state, duration_s)
 
     print()
     print("=== Messsystem-Testmodus ===")
     print(f"Hardware: {options.hardware}")
+    if options.hardware == "led":
+        print(f"LED-State: {options.led_state}")
     print(f"Taster:   {'aktiv' if options.use_button else 'nicht aktiv'}")
     print(f"Dauer:    {'bis q + Enter' if options.duration_s <= 0 else f'{options.duration_s} s'}")
     print()
@@ -44,11 +49,20 @@ def run_hardware_test(
 
     button_probe = ButtonProbe(config) if options.use_button else None
     gnss_probe = GnssProbe(config) if options.hardware in {"gnss", "both"} else None
+    led_probe = LedProbe(config) if options.hardware == "led" else None
     exit_code = 0
 
     try:
         if button_probe is not None and not button_probe.start():
             exit_code = 1
+
+        if led_probe is not None:
+            if not led_probe.start():
+                exit_code = 1
+            else:
+                led_probe.set_state(options.led_state)
+                _run_status_loop(options.duration_s, button_probe=button_probe)
+            return exit_code
 
         if options.hardware == "none":
             print("Kein Hardwaretest gewählt. Tastatur/Taster können trotzdem geprüft werden.")
@@ -76,12 +90,45 @@ def run_hardware_test(
     except KeyboardInterrupt:
         print("\nTest per Ctrl+C beendet.")
     finally:
+        if led_probe is not None:
+            led_probe.stop()
         if gnss_probe is not None:
             gnss_probe.stop()
         if button_probe is not None:
             button_probe.stop()
 
     return exit_code
+
+
+class LedProbe:
+    def __init__(self, config: AppConfig):
+        from .config import StatusLedConfig
+        from .status_led import StatusLed
+
+        self._led = StatusLed(StatusLedConfig(enabled=True, gpio=config.status_led.gpio))
+
+    def start(self) -> bool:
+        print("LED-Test: initialisiere Status-LED ...")
+        try:
+            self._led.start()
+        except Exception as exc:
+            print(f"FEHLER: Status-LED konnte nicht gestartet werden: {exc}")
+            if _looks_like_missing_pin_factory(exc):
+                print("Die GPIO-Pin-Factory fehlt oder ist in der .venv nicht sichtbar.")
+            if _looks_like_busy_pin(exc):
+                print("Der LED-Pin ist vermutlich schon durch den Messdienst oder einen zweiten Testprozess belegt.")
+            return False
+        print("OK: Status-LED aktiv.")
+        return True
+
+    def set_state(self, state_name: LedStateName) -> None:
+        from .status_led import SystemState
+
+        self._led.set_state(SystemState[state_name])
+        print(f"LED zeigt jetzt: {state_name}")
+
+    def stop(self) -> None:
+        self._led.stop()
 
 
 class ButtonProbe:
@@ -300,10 +347,16 @@ def _read_keyboard_command(timeout_s: float) -> str | None:
 def _interactive_options(
     hardware: str | None,
     use_button: bool,
+    led_state: str | None,
     duration_s: int,
 ) -> TestOptions:
     if hardware is not None:
-        return TestOptions(_validate_hardware(hardware), use_button, duration_s)
+        return TestOptions(
+            _validate_hardware(hardware),
+            use_button,
+            _validate_led_state(led_state or "IDLE"),
+            duration_s,
+        )
 
     print("=== Interaktiver Hardware-Test ===")
     print("Welche Hardware soll getestet werden?")
@@ -311,7 +364,8 @@ def _interactive_options(
     print("  2  nur Taster")
     print("  3  nur Referenz-GNSS")
     print("  4  nur Cellulink")
-    print("  5  Referenz-GNSS und Cellulink")
+    print("  5  nur Status-LED")
+    print("  6  Referenz-GNSS und Cellulink")
     choice = input("Auswahl [1]: ").strip() or "1"
 
     mapping: dict[str, tuple[HardwareMode, bool]] = {
@@ -319,10 +373,14 @@ def _interactive_options(
         "2": ("none", True),
         "3": ("gnss", False),
         "4": ("cellulink", False),
-        "5": ("both", False),
+        "5": ("led", False),
+        "6": ("both", False),
     }
     selected_hardware, selected_button = mapping.get(choice, ("none", False))
-    if choice in {"3", "4", "5"}:
+    selected_led_state = _validate_led_state(led_state or "IDLE")
+    if selected_hardware == "led":
+        selected_led_state = _ask_led_state(selected_led_state)
+    if choice in {"3", "4", "5", "6"}:
         selected_button = _ask_yes_no("Taster zusätzlich testen? [j/N]: ", default=False)
 
     duration_text = input(f"Testdauer in Sekunden, 0 = bis q + Enter [{duration_s}]: ").strip()
@@ -332,13 +390,39 @@ def _interactive_options(
         except ValueError:
             print(f"Ungültige Dauer, verwende {duration_s} s.")
 
-    return TestOptions(selected_hardware, selected_button, duration_s)
+    return TestOptions(selected_hardware, selected_button, selected_led_state, duration_s)
 
 
 def _validate_hardware(value: str) -> HardwareMode:
-    if value not in {"none", "gnss", "cellulink", "both"}:
+    if value not in {"none", "gnss", "cellulink", "led", "both"}:
         raise ValueError(f"Unbekannter Hardwaremodus: {value}")
     return value  # type: ignore[return-value]
+
+
+def _validate_led_state(value: str) -> LedStateName:
+    normalized = value.strip().upper()
+    if normalized not in {"IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"}:
+        raise ValueError(f"Unbekannter LED-State: {value}")
+    return normalized  # type: ignore[return-value]
+
+
+def _ask_led_state(default: LedStateName) -> LedStateName:
+    print("Welcher LED-State soll angezeigt werden?")
+    print("  1  IDLE")
+    print("  2  STARTING")
+    print("  3  RUNNING")
+    print("  4  STOPPING")
+    print("  5  ERROR")
+    choice = input(f"Auswahl [{default}]: ").strip()
+    mapping = {
+        "1": "IDLE",
+        "2": "STARTING",
+        "3": "RUNNING",
+        "4": "STOPPING",
+        "5": "ERROR",
+        "": default,
+    }
+    return _validate_led_state(mapping.get(choice, choice))
 
 
 def _ask_yes_no(prompt: str, default: bool) -> bool:

@@ -32,13 +32,18 @@ def main() -> int:
     )
     parser.add_argument(
         "--test-hardware",
-        choices=["none", "gnss", "cellulink", "both"],
+        choices=["none", "gnss", "cellulink", "led", "both"],
         help="Hardware to test in --test mode; omit for interactive menu",
     )
     parser.add_argument(
         "--test-button",
         action="store_true",
         help="Also test the GPIO button in --test mode",
+    )
+    parser.add_argument(
+        "--test-led-state",
+        choices=["IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"],
+        help="Status LED state to show in --test-hardware led mode",
     )
     parser.add_argument(
         "--test-seconds",
@@ -56,6 +61,7 @@ def main() -> int:
             config,
             hardware=args.test_hardware,
             use_button=args.test_button,
+            led_state=args.test_led_state,
             duration_s=args.test_seconds,
         )
 

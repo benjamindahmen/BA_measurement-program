@@ -197,11 +197,13 @@ sauberen Messstopp und anschließend das Herunterfahren aus.
 
 Die LED zeigt den Zustand an:
 
-- `IDLE`: langsames Blinken
-- `STARTING`: schnelles Blinken
-- `RUNNING`: dauerhaft an
-- `STOPPING`: dreimaliges kurzes Blinken
-- `ERROR`: dauerhaft schnelles Blinken
+| Zustand | LED-Verhalten | Bedeutung |
+|---|---|---|
+| `IDLE` | langsames Blinken | System ist bereit, aber es läuft keine Messung |
+| `STARTING` | schnelles Blinken | Messung wird vorbereitet und gestartet |
+| `RUNNING` | dauerhaft an | Messung läuft |
+| `STOPPING` | dreimaliges kurzes Blinken | Messung wird sauber beendet |
+| `ERROR` | dauerhaft schnelles Blinken | Fehlerzustand |
 
 Alle Zustandswechsel werden unabhängig von der LED in `data/system.log`
 protokolliert.
@@ -266,6 +268,7 @@ Das Menü bietet:
 - nur Taster
 - nur Referenz-GNSS
 - nur Cellulink
+- nur Status-LED
 - Referenz-GNSS und Cellulink
 
 Während laufender Tests beendet `q` + `Enter` den Test. `Ctrl+C` funktioniert
@@ -291,6 +294,9 @@ python main.py --test --test-hardware gnss --test-seconds 60
 # nur Cellulink-Erreichbarkeit, Login und API-Endpunkte
 python main.py --test --test-hardware cellulink
 
+# Status-LED gezielt auf einen Zustand setzen
+python main.py --test --test-hardware led --test-led-state RUNNING --test-seconds 10
+
 # Referenz-GNSS und Cellulink, zusätzlich mit Taster
 python main.py --test --test-hardware both --test-button --test-seconds 60
 ```
@@ -301,6 +307,10 @@ gültiger Fix vorliegt und welche Position/Satellitenzahl erkannt wurde.
 
 Der Cellulink-Test prüft Erreichbarkeit, Login und die relevanten API-Endpunkte.
 Das Passwort und der Access Token werden nicht ausgegeben.
+
+Der LED-Test setzt die Status-LED gezielt auf einen der Zustände `IDLE`,
+`STARTING`, `RUNNING`, `STOPPING` oder `ERROR`. Mit `--test-seconds 0` bleibt
+der Zustand aktiv, bis der Test mit `q` + `Enter` beendet wird.
 
 Nach dem Test kann der Dienst wieder gestartet werden:
 
