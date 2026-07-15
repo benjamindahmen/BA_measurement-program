@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 import requests
@@ -140,23 +141,69 @@ def extract_cellulink_gnss_fields(status_payload: dict[str, Any] | None, info_pa
     status_payload = status_payload or {}
     info_payload = info_payload or {}
     merged = [status_payload, info_payload]
-    speed_mps = to_float(deep_first_existing(merged, ["speed_mps", "speedMps", "speed"]))
-    speed_kmh = to_float(deep_first_existing(merged, ["speed_kmh", "speedKmh"]))
+    speed_mps = _first_float(
+        merged,
+        exact=["speed_mps", "speedMps"],
+        contains=["speedmps", "speedmeterpersecond", "meterspersecond", "geschwindigkeitmps"],
+    )
+    speed_kmh = _first_float(
+        merged,
+        exact=["speed_kmh", "speedKmh"],
+        contains=["speedkmh", "kmperhour", "kilometersperhour", "geschwindigkeitkmh"],
+    )
+    if speed_mps is None:
+        speed_mps = _first_float(merged, exact=["speed"], contains=["speed", "geschwindigkeit"])
     if speed_kmh is None and speed_mps is not None:
         speed_kmh = speed_mps * 3.6
     return {
-        "cellulink_gnss_status": _as_text(deep_first_existing(merged, ["status", "gnss_status", "gnssStatus", "fixStatus"])),
-        "cellulink_gnss_time": _as_text(deep_first_existing(merged, ["time", "utc_time", "utcTime"])),
-        "cellulink_gnss_date": _as_text(deep_first_existing(merged, ["date", "utc_date", "utcDate"])),
-        "cellulink_gnss_latitude": to_float(deep_first_existing(merged, ["latitude", "lat"])),
-        "cellulink_gnss_longitude": to_float(deep_first_existing(merged, ["longitude", "lon", "lng"])),
+        "cellulink_gnss_status": _first_text(
+            merged,
+            exact=["status", "gnss_status", "gnssStatus", "fixStatus"],
+            contains=["fixstatus", "gnssstatus"],
+        ),
+        "cellulink_gnss_time": _first_text(
+            merged,
+            exact=["time", "utc_time", "utcTime", "gnssTime"],
+            contains=["lastlocation", "lastposition", "timestamp", "zeit"],
+        ),
+        "cellulink_gnss_date": _first_text(
+            merged,
+            exact=["date", "utc_date", "utcDate", "gnssDate"],
+            contains=["datum"],
+        ),
+        "cellulink_gnss_latitude": _first_coordinate(
+            merged,
+            exact=["latitude", "lat", "gnssLatitude"],
+            contains=["latitude", "breitengrad", "breite"],
+        ),
+        "cellulink_gnss_longitude": _first_coordinate(
+            merged,
+            exact=["longitude", "lon", "lng", "gnssLongitude"],
+            contains=["longitude", "laengengrad", "langengrad", "laenge", "lange"],
+        ),
         "cellulink_gnss_speed_kmh": speed_kmh,
         "cellulink_gnss_speed_mps": speed_mps,
-        "cellulink_gnss_altitude_m": to_float(deep_first_existing(merged, ["altitude_m", "altitude", "height"])),
-        "cellulink_gnss_mode": _as_text(deep_first_existing(merged, ["mode", "fixMode"])),
-        "cellulink_gnss_used_satellites": to_int(deep_first_existing(merged, ["used_satellites", "usedSatellites", "satellitesUsed"])),
-        "cellulink_gnss_visible_satellites": to_int(deep_first_existing(merged, ["visible_satellites", "visibleSatellites", "satellitesVisible"])),
-        "cellulink_gnss_track_angle": to_float(deep_first_existing(merged, ["track_angle", "trackAngle", "course"])),
+        "cellulink_gnss_altitude_m": _first_float(
+            merged,
+            exact=["altitude_m", "altitude", "height", "gnssAltitudeInMeters"],
+            contains=["altitudeinmeters", "heightinmeters", "hoehe", "hohe"],
+        ),
+        "cellulink_gnss_mode": _first_text(merged, exact=["mode", "fixMode"], contains=["fixmode", "mode"]),
+        "cellulink_gnss_used_satellites": _first_int(
+            merged,
+            exact=["used_satellites", "usedSatellites", "satellitesUsed"],
+            contains=["usedsatellites", "satellitesused", "numusedsatellites", "benutztesatelliten"],
+        ),
+        "cellulink_gnss_visible_satellites": _first_int(
+            merged,
+            exact=["visible_satellites", "visibleSatellites", "satellitesVisible"],
+            contains=["visiblesatellites", "satellitesvisible", "numvisiblesatellites", "sichtbaresatelliten"],
+        ),
+        "cellulink_gnss_track_angle": _first_float(
+            merged,
+            exact=["track_angle", "trackAngle", "course"],
+            contains=["trackangle", "course", "direction", "bewegungsrichtung"],
+        ),
         "cellulink_gnss_status_json": json_dumps(status_payload) if status_payload else None,
         "cellulink_gnss_json": json_dumps(info_payload) if info_payload else None,
     }
@@ -166,3 +213,85 @@ def _as_text(value: Any) -> str | None:
     if value in (None, ""):
         return None
     return str(value)
+
+
+def _first_text(data: Any, exact: list[str], contains: list[str]) -> str | None:
+    value = _first_value(data, exact, contains)
+    return _as_text(value)
+
+
+def _first_float(data: Any, exact: list[str], contains: list[str]) -> float | None:
+    return to_float(_first_value(data, exact, contains))
+
+
+def _first_coordinate(data: Any, exact: list[str], contains: list[str]) -> float | None:
+    value = deep_first_existing(data, exact)
+    coordinate = _coordinate_from_value(value)
+    if coordinate is not None:
+        return coordinate
+    value = _deep_first_matching_key(
+        data,
+        {_normalize_key(key) for key in exact},
+        [_normalize_key(key) for key in contains],
+        allow_container=True,
+    )
+    return _coordinate_from_value(value)
+
+
+def _first_int(data: Any, exact: list[str], contains: list[str]) -> int | None:
+    return to_int(_first_value(data, exact, contains))
+
+
+def _first_value(data: Any, exact: list[str], contains: list[str]) -> Any:
+    value = deep_first_existing(data, exact)
+    if value not in (None, ""):
+        return value
+    exact_normalized = {_normalize_key(key) for key in exact}
+    contains_normalized = [_normalize_key(key) for key in contains]
+    return _deep_first_matching_key(data, exact_normalized, contains_normalized)
+
+
+def _deep_first_matching_key(
+    data: Any,
+    exact: set[str],
+    contains: list[str],
+    allow_container: bool = False,
+) -> Any:
+    stack = [data]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                normalized = _normalize_key(str(key))
+                if normalized in exact or any(candidate and candidate in normalized for candidate in contains):
+                    if value not in (None, "") and (allow_container or not isinstance(value, (dict, list))):
+                        return value
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(current, list):
+            stack.extend(reversed(current))
+    return None
+
+
+def _coordinate_from_value(value: Any) -> float | None:
+    if isinstance(value, dict):
+        decimal = to_float(deep_first_existing(value, ["decimalDegrees", "decimal_degrees"]))
+        if decimal is not None:
+            return decimal
+        degrees = to_float(deep_first_existing(value, ["degrees"]))
+        minutes = to_float(deep_first_existing(value, ["minutes"]))
+        seconds = to_float(deep_first_existing(value, ["seconds"])) or 0.0
+        if degrees is None:
+            return None
+        coordinate = abs(degrees) + ((minutes or 0.0) / 60.0) + (seconds / 3600.0)
+        hemisphere = str(deep_first_existing(value, ["hemisphere"]) or "").upper()
+        if hemisphere in {"S", "W"} or degrees < 0:
+            coordinate *= -1.0
+        return coordinate
+    return to_float(value)
+
+
+def _normalize_key(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", value)
+    ascii_value = decomposed.encode("ascii", "ignore").decode("ascii")
+    return "".join(character for character in ascii_value.lower() if character.isalnum())

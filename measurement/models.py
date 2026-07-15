@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -54,6 +55,9 @@ def to_float(value: Any) -> float | None:
         return None
     if isinstance(value, str):
         value = value.strip().replace(",", ".")
+        number_match = re.search(r"[-+]?\d+(?:\.\d+)?", value)
+        if number_match:
+            value = number_match.group(0)
     try:
         return float(value)
     except (TypeError, ValueError):

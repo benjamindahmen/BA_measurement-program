@@ -3,6 +3,7 @@ from __future__ import annotations
 import select
 import sys
 import time
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -295,6 +296,18 @@ def run_cellulink_test(config: AppConfig) -> bool:
                 "cellulink_gnss_visible_satellites",
             ],
         )
+        if fields.get("cellulink_gnss_latitude") is None or fields.get("cellulink_gnss_longitude") is None:
+            print("Hinweis: GNSS-Position konnte nicht aus den API-Feldern extrahiert werden.")
+            print("GNSS-Rohdaten zur Feldnamenprüfung:")
+            print(json.dumps(
+                {
+                    "status": payloads.get("Cellulink-GNSS-Status"),
+                    "information": payloads.get("Cellulink-GNSS-Information"),
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ))
 
     return success
 
