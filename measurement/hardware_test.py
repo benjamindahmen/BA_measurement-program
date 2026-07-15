@@ -346,14 +346,19 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
 
     try:
         before_payload = api_client.get_cellular_status()
+        before_config_payload = api_client.get_modem_configuration()
     except Exception as exc:
-        print(f"FEHLER: Mobilfunkstatus vor Reconnect konnte nicht gelesen werden: {exc}")
+        print(f"FEHLER: Mobilfunkstatus/-konfiguration vor Reconnect konnte nicht gelesen werden: {exc}")
         return False
 
     before_fields = extract_cellular_fields(before_payload)
     before_signature = _cellular_reconnect_signature(before_fields)
+    before_config_fields = _extract_modem_configuration_fields(before_config_payload)
+    before_config_signature = _modem_configuration_signature(before_config_fields)
     print("Mobilfunkstatus vor Reconnect:")
     _print_cellular_reconnect_snapshot(before_fields)
+    print("Modem-Konfiguration vor Reconnect:")
+    _print_modem_configuration_snapshot(before_config_fields)
 
     try:
         api_client.reconnect_cellular_connection(
@@ -366,20 +371,23 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
         return False
 
     print("OK: Reconnect-API-Call wurde vom Router angenommen.")
-    print(f"Beobachte jetzt {duration_s} s lang Mobilfunkstatus und Ping zu {config.ping.target} ...")
+    print(f"Beobachte jetzt {duration_s} s lang Modem-Konfiguration, Mobilfunkstatus und Ping zu google.com ...")
 
     ping_config = PingConfig(
         enabled=True,
-        target=config.ping.target,
-        interval_s=config.startup.check_interval_s,
-        count=max(config.startup.ping_count, 1),
-        timeout_s=max(config.startup.ping_timeout_s, 1),
+        target="google.com",
+        interval_s=1.0,
+        count=1,
+        timeout_s=2,
     )
     dummy_gnss = GnssState()
     status_changed = False
+    modem_configuration_changed = False
+    activated_toggled = False
     ping_failed = False
     ping_recovered_after_failure = False
     last_fields = before_fields
+    last_config_fields = before_config_fields
     start = time.monotonic()
     next_poll = start
 
@@ -390,6 +398,16 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
             continue
         elapsed_s = int(now - start)
         try:
+            current_config_payload = api_client.get_modem_configuration()
+            last_config_fields = _extract_modem_configuration_fields(current_config_payload)
+            current_config_signature = _modem_configuration_signature(last_config_fields)
+            if current_config_signature != before_config_signature:
+                modem_configuration_changed = True
+            if last_config_fields.get("modem_activated") != before_config_fields.get("modem_activated"):
+                activated_toggled = True
+            print(f"[{elapsed_s:>3}s] Modem-Konfiguration:")
+            _print_modem_configuration_snapshot(last_config_fields, prefix="    ")
+
             current_payload = api_client.get_cellular_status()
             last_fields = extract_cellular_fields(current_payload)
             current_signature = _cellular_reconnect_signature(last_fields)
@@ -399,7 +417,8 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
             _print_cellular_reconnect_snapshot(last_fields, prefix="    ")
         except Exception as exc:
             status_changed = True
-            print(f"[{elapsed_s:>3}s] Mobilfunkstatus konnte nicht gelesen werden: {exc}")
+            modem_configuration_changed = True
+            print(f"[{elapsed_s:>3}s] Modem-Konfiguration/Mobilfunkstatus konnte nicht gelesen werden: {exc}")
 
         ping_result = run_ping(ping_config, dummy_gnss)
         ping_ok = bool(ping_result.get("success"))
@@ -408,11 +427,19 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
         elif ping_failed:
             ping_recovered_after_failure = True
         print(f"      Ping: {_format_reconnect_ping(ping_result)}")
-        next_poll = time.monotonic() + max(config.startup.check_interval_s, 1.0)
+        next_poll = time.monotonic() + 1.0
 
+    print("Modem-Konfiguration nach Beobachtungsfenster:")
+    _print_modem_configuration_snapshot(last_config_fields)
     print("Mobilfunkstatus nach Beobachtungsfenster:")
     _print_cellular_reconnect_snapshot(last_fields)
     print("Auswertung:")
+    if activated_toggled:
+        print("  OK: modem_activated hat während des Tests den Zustand gewechselt.")
+    elif modem_configuration_changed:
+        print("  OK: Modem-Konfiguration hat sich während des Tests verändert.")
+    else:
+        print("  HINWEIS: Modem-Konfiguration blieb während des Tests gleich.")
     if status_changed:
         print("  OK: Mobilfunkstatus hat sich während des Tests verändert.")
     else:
@@ -424,12 +451,12 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
     else:
         print("  HINWEIS: Ping blieb durchgehend erfolgreich.")
 
-    if status_changed or ping_failed:
+    if activated_toggled or modem_configuration_changed or status_changed or ping_failed:
         print("Bewertung: Es gibt Hinweise auf eine echte Mobilfunk-Neuverbindung.")
         return True
     print("Bewertung: Nicht eindeutig. Der API-Call wurde angenommen, aber eine Neuverbindung war nicht sichtbar.")
     print("Tipp: Test mit längerer Dauer wiederholen, z. B. --test-seconds 90.")
-    return True
+    return False
 
 
 def _run_status_loop(
@@ -614,6 +641,34 @@ def _cellular_reconnect_signature(fields: dict[str, Any]) -> tuple[Any, ...]:
             "cellular_cell_id",
         ]
     )
+
+
+def _extract_modem_configuration_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    from .models import deep_first_existing, to_int
+
+    activated = deep_first_existing(payload, ["activated"])
+    return {
+        "modem_activated": activated,
+        "modem_mtu": to_int(deep_first_existing(payload, ["mtu"])),
+    }
+
+
+def _modem_configuration_signature(fields: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        fields.get(key)
+        for key in [
+            "modem_activated",
+            "modem_mtu",
+        ]
+    )
+
+
+def _print_modem_configuration_snapshot(fields: dict[str, Any], prefix: str = "  ") -> None:
+    for key in [
+        "modem_activated",
+        "modem_mtu",
+    ]:
+        print(f"{prefix}{key}: {fields.get(key)}")
 
 
 def _print_cellular_reconnect_snapshot(fields: dict[str, Any], prefix: str = "  ") -> None:

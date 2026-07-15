@@ -325,7 +325,7 @@ python main.py --test --test-hardware gnss --test-seconds 60
 # nur Cellulink-Erreichbarkeit, Login und API-Endpunkte
 python main.py --test --test-hardware cellulink
 
-# Cellulink-Reconnect auslösen und Mobilfunkstatus/Ping beobachten
+# Cellulink-Reconnect auslösen und Modem-Konfiguration/Mobilfunkstatus/Ping beobachten
 python main.py --test --test-hardware reconnect --test-seconds 90
 
 # Status-LED gezielt auf einen Zustand setzen
@@ -343,8 +343,9 @@ Der Cellulink-Test prüft Erreichbarkeit, Login und die relevanten API-Endpunkte
 Das Passwort und der Access Token werden nicht ausgegeben.
 
 Der Reconnect-Test löst den konfigurierten Cellulink-Reconnect aus und
-beobachtet danach Mobilfunkstatus und Ping. Eine echte Neuverbindung ist
-typischerweise an kurzzeitigem Ping-Ausfall, Statuswechseln oder geänderten
+beobachtet danach Modem-Konfiguration, Mobilfunkstatus und einen Einzelping zu
+`google.com`. Eine echte Neuverbindung ist typischerweise an einem kurzzeitigen
+Wechsel von `modem_activated`, Ping-Ausfall, Statuswechseln oder geänderten
 Mobilfunkwerten erkennbar.
 
 Der LED-Test setzt die Status-LED gezielt auf einen der Zustände `IDLE`,
