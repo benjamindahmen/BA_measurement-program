@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .models import GnssState
 
 
-HardwareMode = Literal["none", "gnss", "cellulink", "led", "both"]
+HardwareMode = Literal["none", "gnss", "cellulink", "reconnect", "led", "both"]
 LedStateName = Literal["IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"]
 
 
@@ -72,6 +72,11 @@ def run_hardware_test(
         if options.hardware in {"cellulink", "both"}:
             if not run_cellulink_test(config):
                 exit_code = 1
+
+        if options.hardware == "reconnect":
+            if not run_cellulink_reconnect_test(config, options.duration_s):
+                exit_code = 1
+            return exit_code
 
         if gnss_probe is not None:
             if not gnss_probe.start():
@@ -312,6 +317,121 @@ def run_cellulink_test(config: AppConfig) -> bool:
     return success
 
 
+def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> bool:
+    from .cellulink_api import CellulinkApiClient, extract_cellular_fields
+    from .cellulink_auth import CellulinkAuthenticator
+    from .config import PingConfig
+    from .models import GnssState
+    from .ping_test import run_ping
+
+    duration_s = max(duration_s, 10)
+    print("Cellulink-Reconnect-Test: prüfe, ob der Router eine Mobilfunk-Neuverbindung auslöst ...")
+    print(f"Ziel: {config.cellulink.base_url}")
+    print(
+        "Reconnect-Call: "
+        f"{config.startup.cellular_reconnect_method} "
+        f"{config.startup.cellular_reconnect_path} "
+        f"action={config.startup.cellular_reconnect_action}"
+    )
+    try:
+        authenticator = CellulinkAuthenticator(config.cellulink)
+        authenticator.reachability_check()
+        print("OK: Cellulink-Webinterface erreichbar.")
+        access_token = authenticator.login()
+        print("OK: Login erfolgreich, Access Token erhalten.")
+        api_client = CellulinkApiClient(config.cellulink, access_token)
+    except Exception as exc:
+        print(f"FEHLER: Cellulink-Erreichbarkeit/Login fehlgeschlagen: {exc}")
+        return False
+
+    try:
+        before_payload = api_client.get_cellular_status()
+    except Exception as exc:
+        print(f"FEHLER: Mobilfunkstatus vor Reconnect konnte nicht gelesen werden: {exc}")
+        return False
+
+    before_fields = extract_cellular_fields(before_payload)
+    before_signature = _cellular_reconnect_signature(before_fields)
+    print("Mobilfunkstatus vor Reconnect:")
+    _print_cellular_reconnect_snapshot(before_fields)
+
+    try:
+        api_client.reconnect_cellular_connection(
+            config.startup.cellular_reconnect_path,
+            config.startup.cellular_reconnect_method,
+            config.startup.cellular_reconnect_action,
+        )
+    except Exception as exc:
+        print(f"FEHLER: Reconnect-API-Call fehlgeschlagen: {exc}")
+        return False
+
+    print("OK: Reconnect-API-Call wurde vom Router angenommen.")
+    print(f"Beobachte jetzt {duration_s} s lang Mobilfunkstatus und Ping zu {config.ping.target} ...")
+
+    ping_config = PingConfig(
+        enabled=True,
+        target=config.ping.target,
+        interval_s=config.startup.check_interval_s,
+        count=max(config.startup.ping_count, 1),
+        timeout_s=max(config.startup.ping_timeout_s, 1),
+    )
+    dummy_gnss = GnssState()
+    status_changed = False
+    ping_failed = False
+    ping_recovered_after_failure = False
+    last_fields = before_fields
+    start = time.monotonic()
+    next_poll = start
+
+    while time.monotonic() - start < duration_s:
+        now = time.monotonic()
+        if now < next_poll:
+            time.sleep(min(next_poll - now, 0.2))
+            continue
+        elapsed_s = int(now - start)
+        try:
+            current_payload = api_client.get_cellular_status()
+            last_fields = extract_cellular_fields(current_payload)
+            current_signature = _cellular_reconnect_signature(last_fields)
+            if current_signature != before_signature:
+                status_changed = True
+            print(f"[{elapsed_s:>3}s] Mobilfunkstatus:")
+            _print_cellular_reconnect_snapshot(last_fields, prefix="    ")
+        except Exception as exc:
+            status_changed = True
+            print(f"[{elapsed_s:>3}s] Mobilfunkstatus konnte nicht gelesen werden: {exc}")
+
+        ping_result = run_ping(ping_config, dummy_gnss)
+        ping_ok = bool(ping_result.get("success"))
+        if not ping_ok:
+            ping_failed = True
+        elif ping_failed:
+            ping_recovered_after_failure = True
+        print(f"      Ping: {_format_reconnect_ping(ping_result)}")
+        next_poll = time.monotonic() + max(config.startup.check_interval_s, 1.0)
+
+    print("Mobilfunkstatus nach Beobachtungsfenster:")
+    _print_cellular_reconnect_snapshot(last_fields)
+    print("Auswertung:")
+    if status_changed:
+        print("  OK: Mobilfunkstatus hat sich während des Tests verändert.")
+    else:
+        print("  HINWEIS: Mobilfunkstatus blieb während des Tests gleich.")
+    if ping_failed and ping_recovered_after_failure:
+        print("  OK: Ping war kurz gestört und danach wieder erfolgreich.")
+    elif ping_failed:
+        print("  HINWEIS: Ping war gestört, hat sich im Beobachtungsfenster aber nicht sicher erholt.")
+    else:
+        print("  HINWEIS: Ping blieb durchgehend erfolgreich.")
+
+    if status_changed or ping_failed:
+        print("Bewertung: Es gibt Hinweise auf eine echte Mobilfunk-Neuverbindung.")
+        return True
+    print("Bewertung: Nicht eindeutig. Der API-Call wurde angenommen, aber eine Neuverbindung war nicht sichtbar.")
+    print("Tipp: Test mit längerer Dauer wiederholen, z. B. --test-seconds 90.")
+    return True
+
+
 def _run_status_loop(
     duration_s: int,
     button_probe: ButtonProbe | None = None,
@@ -376,8 +496,9 @@ def _interactive_options(
     print("  2  nur Taster")
     print("  3  nur Referenz-GNSS")
     print("  4  nur Cellulink")
-    print("  5  nur Status-LED")
-    print("  6  Referenz-GNSS und Cellulink")
+    print("  5  Cellulink-Reconnect auslösen und beobachten")
+    print("  6  nur Status-LED")
+    print("  7  Referenz-GNSS und Cellulink")
     choice = input("Auswahl [1]: ").strip() or "1"
 
     mapping: dict[str, tuple[HardwareMode, bool]] = {
@@ -385,14 +506,15 @@ def _interactive_options(
         "2": ("none", True),
         "3": ("gnss", False),
         "4": ("cellulink", False),
-        "5": ("led", False),
-        "6": ("both", False),
+        "5": ("reconnect", False),
+        "6": ("led", False),
+        "7": ("both", False),
     }
     selected_hardware, selected_button = mapping.get(choice, ("none", False))
     selected_led_state = _validate_led_state(led_state or "IDLE")
     if selected_hardware == "led":
         selected_led_state = _ask_led_state(selected_led_state)
-    if choice in {"3", "4", "5", "6"}:
+    if choice in {"3", "4", "5", "6", "7"}:
         selected_button = _ask_yes_no("Taster zusätzlich testen? [j/N]: ", default=False)
 
     duration_text = input(f"Testdauer in Sekunden, 0 = bis q + Enter [{duration_s}]: ").strip()
@@ -406,7 +528,7 @@ def _interactive_options(
 
 
 def _validate_hardware(value: str) -> HardwareMode:
-    if value not in {"none", "gnss", "cellulink", "led", "both"}:
+    if value not in {"none", "gnss", "cellulink", "reconnect", "led", "both"}:
         raise ValueError(f"Unbekannter Hardwaremodus: {value}")
     return value  # type: ignore[return-value]
 
@@ -479,3 +601,43 @@ def _fmt(value: float | None) -> str:
 def _print_selected(data: dict, keys: list[str]) -> None:
     for key in keys:
         print(f"  {key}: {data.get(key)}")
+
+
+def _cellular_reconnect_signature(fields: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(
+        fields.get(key)
+        for key in [
+            "cellular_registration_status",
+            "cellular_packet_data_online",
+            "cellular_technology",
+            "cellular_frequency_band",
+            "cellular_cell_id",
+        ]
+    )
+
+
+def _print_cellular_reconnect_snapshot(fields: dict[str, Any], prefix: str = "  ") -> None:
+    for key in [
+        "cellular_registration_status",
+        "cellular_packet_data_online",
+        "cellular_technology",
+        "cellular_frequency_band",
+        "cellular_cell_id",
+        "cellular_rsrp",
+        "cellular_rsrq",
+        "cellular_rssi",
+        "cellular_sinr",
+    ]:
+        print(f"{prefix}{key}: {fields.get(key)}")
+
+
+def _format_reconnect_ping(result: dict[str, Any]) -> str:
+    success = bool(result.get("success"))
+    received = result.get("received")
+    transmitted = result.get("transmitted")
+    loss = result.get("packet_loss_percent")
+    rtt_avg = result.get("rtt_avg_ms")
+    if success:
+        return f"OK received={received}/{transmitted}, loss={loss}%, rtt_avg={rtt_avg} ms"
+    error = result.get("error_text") or "nicht erfolgreich"
+    return f"FEHLER received={received}/{transmitted}, loss={loss}%, error={error}"

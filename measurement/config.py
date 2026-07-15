@@ -114,10 +114,9 @@ class StatusLedConfig:
 @dataclass(frozen=True)
 class StartupConfig:
     cellular_reset_enabled: bool
-    cellular_disconnect_method: str
-    cellular_disconnect_path: str
-    cellular_connect_method: str
-    cellular_connect_path: str
+    cellular_reconnect_method: str
+    cellular_reconnect_path: str
+    cellular_reconnect_action: str
     cellular_reset_settle_s: float
     ready_timeout_s: float
     check_interval_s: float
@@ -221,21 +220,16 @@ def load_config(path: str | Path) -> AppConfig:
             cellular_reset_enabled=_bool(
                 parser.get("Startup", "CELLULAR_RESET_ENABLED", fallback="true"), True
             ),
-            cellular_disconnect_method=parser.get(
-                "Startup", "CELLULAR_DISCONNECT_METHOD", fallback="POST"
+            cellular_reconnect_method=parser.get(
+                "Startup", "CELLULAR_RECONNECT_METHOD", fallback="PUT"
             ).upper(),
-            cellular_disconnect_path=parser.get(
+            cellular_reconnect_path=parser.get(
                 "Startup",
-                "CELLULAR_DISCONNECT_PATH",
-                fallback="/cellular/modems/{modem_id}/profiles/{profile_id}/disconnect",
+                "CELLULAR_RECONNECT_PATH",
+                fallback="/cellular/connection-check/action",
             ),
-            cellular_connect_method=parser.get(
-                "Startup", "CELLULAR_CONNECT_METHOD", fallback="POST"
-            ).upper(),
-            cellular_connect_path=parser.get(
-                "Startup",
-                "CELLULAR_CONNECT_PATH",
-                fallback="/cellular/modems/{modem_id}/profiles/{profile_id}/connect",
+            cellular_reconnect_action=parser.get(
+                "Startup", "CELLULAR_RECONNECT_ACTION", fallback="Relogin"
             ),
             cellular_reset_settle_s=_float(
                 parser.get("Startup", "CELLULAR_RESET_SETTLE_S", fallback="5.0"), 5.0

@@ -224,29 +224,34 @@ class MeasurementController:
         if not self.config.startup.cellular_reset_enabled:
             self._report_status("Mobilfunk-Neuanmeldung ist deaktiviert")
             return
-        self._report_status("Melde Mobilfunkprofil per API ab")
-        self.logger.info("Mobilfunkprofil wird per API abgemeldet")
+        self._report_status("Starte Mobilfunk-Reconnect per Cellulink-API")
+        self.logger.info(
+            "Mobilfunk-Reconnect wird per API ausgelöst: %s %s action=%s",
+            self.config.startup.cellular_reconnect_method,
+            self.config.startup.cellular_reconnect_path,
+            self.config.startup.cellular_reconnect_action,
+        )
         self.database.log_system_event(
             self.run_id,
             "CELLULAR_RESET_STARTED",
-            "Mobilfunkprofil wird per API ab- und wieder angemeldet",
+            "Mobilfunk-Reconnect wird per Cellulink-API ausgelöst",
+            {
+                "method": self.config.startup.cellular_reconnect_method,
+                "path": self.config.startup.cellular_reconnect_path,
+                "action": self.config.startup.cellular_reconnect_action,
+            },
         )
-        api_client.disconnect_cellular_profile(
-            self.config.startup.cellular_disconnect_path,
-            self.config.startup.cellular_disconnect_method,
+        api_client.reconnect_cellular_connection(
+            self.config.startup.cellular_reconnect_path,
+            self.config.startup.cellular_reconnect_method,
+            self.config.startup.cellular_reconnect_action,
         )
-        self._report_status("Warte nach Mobilfunk-Abmeldung")
+        self._report_status("Warte nach Mobilfunk-Reconnect")
         time.sleep(max(self.config.startup.cellular_reset_settle_s, 0.0))
-        self._report_status("Melde Mobilfunkprofil per API wieder an")
-        self.logger.info("Mobilfunkprofil wird per API wieder angemeldet")
-        api_client.connect_cellular_profile(
-            self.config.startup.cellular_connect_path,
-            self.config.startup.cellular_connect_method,
-        )
         self.database.log_system_event(
             self.run_id,
             "CELLULAR_RESET_FINISHED",
-            "Mobilfunkprofil wurde per API neu angemeldet",
+            "Mobilfunk-Reconnect wurde per Cellulink-API ausgelöst",
         )
 
     def _wait_until_ready(self, api_client: CellulinkApiClient) -> None:

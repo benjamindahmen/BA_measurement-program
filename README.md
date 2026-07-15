@@ -222,16 +222,14 @@ Alle Einstellungen liegen in `config.ini`. Besonders relevant sind:
 Access Tokens bleiben ausschließlich im Speicher. In
 `measurement_runs.config_json` wird das Routerpasswort redigiert gespeichert.
 
-Die Startfreigabe wird über `[Startup]` gesteuert. Die Platzhalter
-`{modem_id}` und `{profile_id}` werden aus `[Cellulink]` eingesetzt:
+Die Startfreigabe wird über `[Startup]` gesteuert:
 
 ```ini
 [Startup]
 CELLULAR_RESET_ENABLED=true
-CELLULAR_DISCONNECT_METHOD=POST
-CELLULAR_DISCONNECT_PATH=/cellular/modems/{modem_id}/profiles/{profile_id}/disconnect
-CELLULAR_CONNECT_METHOD=POST
-CELLULAR_CONNECT_PATH=/cellular/modems/{modem_id}/profiles/{profile_id}/connect
+CELLULAR_RECONNECT_METHOD=PUT
+CELLULAR_RECONNECT_PATH=/cellular/connection-check/action
+CELLULAR_RECONNECT_ACTION=Relogin
 READY_TIMEOUT_S=180.0
 PING_COUNT=1
 ```
@@ -240,10 +238,10 @@ PING_COUNT=1
 
 Nach dem Boot startet systemd das Programm automatisch. Es bleibt zunächst im
 Zustand `IDLE`; eine Messung beginnt erst durch einen kurzen Tastendruck. Der
-Start bleibt im Zustand `STARTING`, bis das Mobilfunkprofil per API einmal ab-
-und wieder angemeldet wurde, Referenz-GNSS und Cellulink-GNSS jeweils einen Fix
-haben und ein einzelner Ping zum konfigurierten Ping-Ziel erfolgreich war. Erst
-danach wechselt die LED auf `RUNNING` und die zyklische Messwerterfassung
+Start bleibt im Zustand `STARTING`, bis der Mobilfunk-Reconnect per
+Cellulink-API ausgelöst wurde, Referenz-GNSS und Cellulink-GNSS jeweils einen
+Fix haben und ein einzelner Ping zum konfigurierten Ping-Ziel erfolgreich war.
+Erst danach wechselt die LED auf `RUNNING` und die zyklische Messwerterfassung
 beginnt.
 
 Der aktuelle Ablauf ist im systemd-Log sichtbar:
@@ -300,6 +298,7 @@ Das Menü bietet:
 - nur Taster
 - nur Referenz-GNSS
 - nur Cellulink
+- Cellulink-Reconnect auslösen und beobachten
 - nur Status-LED
 - Referenz-GNSS und Cellulink
 
@@ -326,6 +325,9 @@ python main.py --test --test-hardware gnss --test-seconds 60
 # nur Cellulink-Erreichbarkeit, Login und API-Endpunkte
 python main.py --test --test-hardware cellulink
 
+# Cellulink-Reconnect auslösen und Mobilfunkstatus/Ping beobachten
+python main.py --test --test-hardware reconnect --test-seconds 90
+
 # Status-LED gezielt auf einen Zustand setzen
 python main.py --test --test-hardware led --test-led-state RUNNING --test-seconds 10
 
@@ -339,6 +341,11 @@ gültiger Fix vorliegt und welche Position/Satellitenzahl erkannt wurde.
 
 Der Cellulink-Test prüft Erreichbarkeit, Login und die relevanten API-Endpunkte.
 Das Passwort und der Access Token werden nicht ausgegeben.
+
+Der Reconnect-Test löst den konfigurierten Cellulink-Reconnect aus und
+beobachtet danach Mobilfunkstatus und Ping. Eine echte Neuverbindung ist
+typischerweise an kurzzeitigem Ping-Ausfall, Statuswechseln oder geänderten
+Mobilfunkwerten erkennbar.
 
 Der LED-Test setzt die Status-LED gezielt auf einen der Zustände `IDLE`,
 `STARTING`, `RUNNING`, `STOPPING` oder `ERROR`. Mit `--test-seconds 0` bleibt

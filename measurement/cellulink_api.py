@@ -53,6 +53,14 @@ class CellulinkApiClient:
     def get_gnss_information(self) -> dict[str, Any]:
         return self.get_json("/gnss")
 
+    def reconnect_cellular_connection(
+        self,
+        path_template: str,
+        method: str = "PUT",
+        action: str = "Relogin",
+    ) -> None:
+        self.request_action(method, path_template, {"connectionCheckAction": action})
+
     def disconnect_cellular_profile(self, path_template: str, method: str = "POST") -> None:
         self.request_action(method, path_template)
 
