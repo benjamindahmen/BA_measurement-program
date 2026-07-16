@@ -346,16 +346,27 @@ class MeasurementController:
             count=max(self.config.startup.ping_count, 1),
             timeout_s=max(self.config.startup.ping_timeout_s, 1),
         )
+        result = self._execute_startup_ping(ping_config)
+        if result["success"]:
+            self._log_startup_ping_ok(result)
+            return True
+
+        self._log_startup_ping_failed(result)
+        return False
+
+    def _execute_startup_ping(self, ping_config: PingConfig) -> dict:
         result = run_ping(ping_config, GnssState())
         result["run_id"] = self.run_id
         self.database.insert_ping_result(result)
-        if result["success"]:
-            self.database.log_system_event(
-                self.run_id,
-                "STARTUP_PING_OK",
-                f"Start-Ping zu {ping_config.target} erfolgreich",
-            )
-            return True
+        return result
+
+    def _log_startup_ping_ok(self, result: dict) -> None:
+        target = str(result.get("target"))
+        message = f"Start-Ping zu {target} erfolgreich"
+        details = {"target": target}
+        self.database.log_system_event(self.run_id, "STARTUP_PING_OK", message, details)
+
+    def _log_startup_ping_failed(self, result: dict) -> None:
         self.database.log_error(self.run_id, "startup_ping", result.get("error_text") or "startup ping failed")
         self.database.log_system_event(
             self.run_id,
@@ -382,7 +393,6 @@ class MeasurementController:
             result.get("error_text"),
             _short_log_text(result.get("raw_output")),
         )
-        return False
 
     def _save_startup_snapshots(self, api_client: CellulinkApiClient) -> None:
         if self.run_id is None:

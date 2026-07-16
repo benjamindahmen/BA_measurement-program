@@ -232,6 +232,7 @@ MODEM_TOGGLE_ENABLED=true
 MODEM_TOGGLE_SETTLE_S=5.0
 READY_TIMEOUT_S=180.0
 PING_COUNT=1
+PING_TIMEOUT_S=5
 ```
 
 Die SIM-Konfigurationen werden ebenfalls in `config.ini` hinterlegt. Die PINs
