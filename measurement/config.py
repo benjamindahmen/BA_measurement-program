@@ -210,7 +210,7 @@ def load_config(path: str | Path) -> AppConfig:
         ),
         ping=PingConfig(
             enabled=_bool(parser.get("Ping", "ENABLED", fallback="true"), True),
-            target=parser.get("Ping", "TARGET", fallback="google.com"),
+            target=parser.get("Ping", "TARGET", fallback="google.com").strip(),
             interval_s=_float(parser.get("Ping", "INTERVAL_S", fallback="10"), 10.0),
             count=_int(parser.get("Ping", "COUNT", fallback="4"), 4),
             timeout_s=_int(parser.get("Ping", "TIMEOUT_S", fallback="5"), 5),

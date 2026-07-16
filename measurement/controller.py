@@ -19,6 +19,15 @@ from .sim_config import read_active_sim_config
 from .status_led import StatusLed, SystemState
 
 
+def _short_log_text(value: object, limit: int = 500) -> str | None:
+    if value in (None, ""):
+        return None
+    text = " ".join(str(value).split())
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
 class MeasurementController:
     def __init__(
         self,
@@ -352,6 +361,26 @@ class MeasurementController:
             self.run_id,
             "STARTUP_PING_FAILED",
             result.get("error_text") or "startup ping failed",
+            {
+                "target": result.get("target"),
+                "count": result.get("count"),
+                "transmitted": result.get("transmitted"),
+                "received": result.get("received"),
+                "packet_loss_percent": result.get("packet_loss_percent"),
+                "error_text": result.get("error_text"),
+                "raw_output": _short_log_text(result.get("raw_output")),
+            },
+        )
+        self.logger.warning(
+            "Start-Ping fehlgeschlagen: target=%s count=%s transmitted=%s received=%s "
+            "loss=%s error=%s raw=%s",
+            result.get("target"),
+            result.get("count"),
+            result.get("transmitted"),
+            result.get("received"),
+            result.get("packet_loss_percent"),
+            result.get("error_text"),
+            _short_log_text(result.get("raw_output")),
         )
         return False
 

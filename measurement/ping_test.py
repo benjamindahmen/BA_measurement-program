@@ -39,18 +39,21 @@ def run_ping(
         )
         raw_output = (completed.stdout or "") + (completed.stderr or "")
         parsed = _parse_ping(raw_output)
-        success = (
+        command_succeeded = (
             not completed.cancelled
             and not completed.timed_out
             and completed.returncode == 0
-            and (parsed.get("received") or 0) > 0
         )
+        if command_succeeded and "received" in parsed:
+            success = (parsed.get("received") or 0) > 0
+        else:
+            success = command_succeeded
         if completed.cancelled:
             error_text = "cancelled"
         elif completed.timed_out:
             error_text = "ping timed out"
         else:
-            error_text = None if success else f"ping exited with code {completed.returncode}"
+            error_text = None if success else _ping_error_text(completed.returncode, raw_output)
     except Exception as exc:
         raw_output = ""
         parsed = {}
@@ -90,3 +93,10 @@ def _parse_ping(output: str) -> dict[str, Any]:
         result["rtt_avg_ms"] = float(rtt_match.group(2))
         result["rtt_max_ms"] = float(rtt_match.group(3))
     return result
+
+
+def _ping_error_text(returncode: int, output: str) -> str:
+    snippet = " ".join(output.strip().split())[:300]
+    if snippet:
+        return f"ping exited with code {returncode}: {snippet}"
+    return f"ping exited with code {returncode}"
