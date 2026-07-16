@@ -32,6 +32,7 @@ class MeasurementDatabase:
                     route_id TEXT,
                     direction TEXT,
                     vehicle TEXT,
+                    sim_config_label TEXT,
                     notes TEXT,
                     config_json TEXT
                 );
@@ -162,16 +163,25 @@ class MeasurementDatabase:
                 );
                 """
             )
+            self._ensure_column("measurement_runs", "sim_config_label", "TEXT")
 
-    def create_run(self, route_id: str, direction: str, vehicle: str, notes: str, config_json: str) -> int:
+    def create_run(
+        self,
+        route_id: str,
+        direction: str,
+        vehicle: str,
+        sim_config_label: str | None,
+        notes: str,
+        config_json: str,
+    ) -> int:
         with self._lock, self._conn:
             cursor = self._conn.execute(
                 """
                 INSERT INTO measurement_runs
-                (start_time_system_utc, route_id, direction, vehicle, notes, config_json)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (start_time_system_utc, route_id, direction, vehicle, sim_config_label, notes, config_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (utc_now_iso(), route_id, direction, vehicle, notes, config_json),
+                (utc_now_iso(), route_id, direction, vehicle, sim_config_label, notes, config_json),
             )
             return int(cursor.lastrowid)
 
@@ -264,3 +274,11 @@ class MeasurementDatabase:
         values = [data[column] for column in columns]
         with self._lock, self._conn:
             self._conn.execute(sql, values)
+
+    def _ensure_column(self, table: str, column: str, definition: str) -> None:
+        existing = {
+            row["name"]
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")

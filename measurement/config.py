@@ -112,7 +112,21 @@ class StatusLedConfig:
 
 
 @dataclass(frozen=True)
+class SimProfileConfig:
+    label: str
+    pin: str
+
+
+@dataclass(frozen=True)
+class SimConfig:
+    active_state_path: Path
+    profiles: dict[str, SimProfileConfig]
+
+
+@dataclass(frozen=True)
 class StartupConfig:
+    modem_toggle_enabled: bool
+    modem_toggle_settle_s: float
     ready_timeout_s: float
     check_interval_s: float
     ping_count: int
@@ -128,6 +142,7 @@ class AppConfig:
     iperf: IperfConfig
     gpio: GpioConfig
     status_led: StatusLedConfig
+    sim: SimConfig
     startup: StartupConfig
     config_path: Path
 
@@ -136,6 +151,9 @@ class AppConfig:
         data["config_path"] = str(self.config_path)
         data["measurement"]["database_path"] = str(self.measurement.database_path)
         data["cellulink"]["password"] = "***redacted***"
+        data["sim"]["active_state_path"] = str(self.sim.active_state_path)
+        for profile in data["sim"]["profiles"].values():
+            profile["pin"] = "***redacted***"
         return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True)
 
 
@@ -150,6 +168,21 @@ def load_config(path: str | Path) -> AppConfig:
     database_path = Path(parser.get("Measurement", "DATABASE_PATH", fallback="data/measurement.sqlite"))
     if not database_path.is_absolute():
         database_path = base_dir / database_path
+    active_sim_state_path = Path(parser.get("SimConfig", "ACTIVE_STATE_PATH", fallback="data/active_sim_config.txt"))
+    if not active_sim_state_path.is_absolute():
+        active_sim_state_path = base_dir / active_sim_state_path
+
+    sim_profiles: dict[str, SimProfileConfig] = {}
+    for section in parser.sections():
+        if not section.lower().startswith("simconfig."):
+            continue
+        label = section.split(".", 1)[1].strip()
+        if not label:
+            continue
+        sim_profiles[label.upper()] = SimProfileConfig(
+            label=label.upper(),
+            pin=parser.get(section, "PIN", fallback="").strip(),
+        )
 
     return AppConfig(
         cellulink=CellulinkConfig(
@@ -211,7 +244,17 @@ def load_config(path: str | Path) -> AppConfig:
             enabled=_bool(parser.get("StatusLED", "ENABLED", fallback="true"), True),
             gpio=_int(parser.get("StatusLED", "GPIO", fallback="27"), 27),
         ),
+        sim=SimConfig(
+            active_state_path=active_sim_state_path,
+            profiles=sim_profiles,
+        ),
         startup=StartupConfig(
+            modem_toggle_enabled=_bool(
+                parser.get("Startup", "MODEM_TOGGLE_ENABLED", fallback="true"), True
+            ),
+            modem_toggle_settle_s=_float(
+                parser.get("Startup", "MODEM_TOGGLE_SETTLE_S", fallback="5.0"), 5.0
+            ),
             ready_timeout_s=_float(
                 parser.get("Startup", "READY_TIMEOUT_S", fallback="180.0"), 180.0
             ),

@@ -15,6 +15,7 @@ from .gpio_control import ButtonEvent, ButtonEventType, GpioButtonControl
 from .models import GnssState
 from .ping_test import run_ping
 from .scheduler import MeasurementScheduler
+from .sim_config import read_active_sim_config
 from .status_led import StatusLed, SystemState
 
 
@@ -91,14 +92,25 @@ class MeasurementController:
         self._set_state(SystemState.STARTING)
         try:
             self._report_status("Lege neue Messfahrt in SQLite an")
+            sim_config_label = read_active_sim_config(self.config)
             self.run_id = self.database.create_run(
                 self.config.measurement.route_id,
                 self.config.measurement.direction,
                 self.config.measurement.vehicle,
+                sim_config_label,
                 self.config.measurement.notes,
                 self.config.redacted_json(),
             )
-            self.logger.info("Messfahrt %s wird gestartet", self.run_id)
+            self.logger.info(
+                "Messfahrt %s wird gestartet; SIM-Konfiguration: %s",
+                self.run_id,
+                sim_config_label or "nicht gesetzt",
+            )
+            self.database.log_system_event(
+                self.run_id,
+                "SIM_CONFIG_SELECTED",
+                sim_config_label or "keine aktive SIM-Konfiguration gesetzt",
+            )
 
             self._report_status("Prüfe Cellulink-Erreichbarkeit")
             authenticator = CellulinkAuthenticator(self.config.cellulink)
@@ -106,6 +118,8 @@ class MeasurementController:
             self._report_status("Melde am Cellulink an")
             access_token = authenticator.login()
             api_client = CellulinkApiClient(self.config.cellulink, access_token)
+
+            self._toggle_modem_connection(api_client)
 
             self._report_status("Starte Referenz-GNSS-Reader")
             self.gnss_reader = ReferenceGnssReader(
@@ -217,6 +231,38 @@ class MeasurementController:
         self.database.log_error(self.run_id, "reference_gnss", message, details)
         self.database.log_system_event(self.run_id, "GNSS_ERROR", message, details)
         self.logger.error("GNSS-Fehler: %s", message)
+
+    def _toggle_modem_connection(self, api_client: CellulinkApiClient) -> None:
+        if not self.config.startup.modem_toggle_enabled:
+            self._report_status("Modem-Neustart per API ist deaktiviert")
+            return
+        self._report_status("Schalte Mobilfunkschnittstelle per API aus")
+        self.logger.info("Mobilfunkschnittstelle wird per API deaktiviert")
+        self.database.log_system_event(
+            self.run_id,
+            "MODEM_TOGGLE_STARTED",
+            "Mobilfunkschnittstelle wird per API aus- und wieder eingeschaltet",
+        )
+        api_client.set_modem_activated(False)
+        self._report_status("Warte nach dem Ausschalten der Mobilfunkschnittstelle")
+        time.sleep(max(self.config.startup.modem_toggle_settle_s, 0.0))
+        self._report_status("Schalte Mobilfunkschnittstelle per API wieder ein")
+        self.logger.info("Mobilfunkschnittstelle wird per API aktiviert")
+        try:
+            api_client.set_modem_activated(True)
+        except Exception:
+            self.logger.exception("Mobilfunkschnittstelle konnte nicht wieder aktiviert werden")
+            self.database.log_system_event(
+                self.run_id,
+                "MODEM_TOGGLE_RESTORE_FAILED",
+                "Mobilfunkschnittstelle konnte nicht wieder aktiviert werden",
+            )
+            raise
+        self.database.log_system_event(
+            self.run_id,
+            "MODEM_TOGGLE_FINISHED",
+            "Mobilfunkschnittstelle wurde per API wieder aktiviert",
+        )
 
     def _wait_until_ready(self, api_client: CellulinkApiClient) -> None:
         deadline = time.monotonic() + max(self.config.startup.ready_timeout_s, 1.0)

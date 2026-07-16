@@ -26,6 +26,11 @@ def main() -> int:
         help="Start a measurement immediately (development/debugging)",
     )
     parser.add_argument(
+        "--set-sim-config",
+        metavar="LABEL",
+        help="Set Cellulink SIM PIN for the named configuration and store the active label",
+    )
+    parser.add_argument(
         "--test",
         action="store_true",
         help="Start interactive shell test mode instead of normal measurement service mode",
@@ -54,6 +59,17 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    if args.set_sim_config:
+        from measurement.sim_config import set_active_sim_config
+
+        try:
+            label = set_active_sim_config(config, args.set_sim_config)
+        except Exception as exc:
+            print(f"FEHLER: SIM-Konfiguration konnte nicht gesetzt werden: {exc}", file=sys.stderr)
+            return 1
+        print(f"OK: SIM-Konfiguration {label} gesetzt und als aktiv gespeichert.")
+        return 0
+
     if args.test:
         from measurement.hardware_test import run_hardware_test
 

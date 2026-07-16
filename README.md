@@ -216,28 +216,62 @@ Alle Einstellungen liegen in `config.ini`. Besonders relevant sind:
 - `[ReferenceGNSS]`: UART-Port, Baudrate und Timeout
 - `[Measurement]`: SQLite-Pfad und Metadaten der Messfahrt
 - `[Startup]`: Startfreigabe
+- `[SimConfig]` und `[SimConfig.K0]`/`[SimConfig.K1]`: SIM-Konfigurationen
 - `[Ping]` und `[Iperf]`: Netzwerkziele, Intervalle und Timeouts
 - `[GPIO]` und `[StatusLED]`: Pins und Bedienzeiten
 
 Access Tokens bleiben ausschließlich im Speicher. In
-`measurement_runs.config_json` wird das Routerpasswort redigiert gespeichert.
+`measurement_runs.config_json` werden Routerpasswort und SIM-PINs redigiert
+gespeichert.
 
 Die Startfreigabe wird über `[Startup]` gesteuert:
 
 ```ini
 [Startup]
+MODEM_TOGGLE_ENABLED=true
+MODEM_TOGGLE_SETTLE_S=5.0
 READY_TIMEOUT_S=180.0
 PING_COUNT=1
 ```
+
+Die SIM-Konfigurationen werden ebenfalls in `config.ini` hinterlegt. Die PINs
+werden nur zum Setzen am Router verwendet und nicht in der SQLite-Datenbank
+gespeichert:
+
+```ini
+[SimConfig]
+ACTIVE_STATE_PATH=data/active_sim_config.txt
+
+[SimConfig.K0]
+PIN=1234
+
+[SimConfig.K1]
+PIN=5678
+```
+
+Vor einer Messfahrt kann die gewünschte SIM-Konfiguration per SSH gesetzt
+werden:
+
+```bash
+cd ~/measurement_system
+source .venv/bin/activate
+python main.py --set-sim-config K0
+```
+
+Das Kommando setzt die PIN über
+`POST /api/v1/cellular/modems/{id}/profiles/{profile_id}/pin` am Cellulink und
+speichert lokal nur das aktive Label, z. B. `K0`. Bei der nächsten Messfahrt
+wird dieses Label in `measurement_runs.sim_config_label` gespeichert.
 
 ## Headless-Betrieb
 
 Nach dem Boot startet systemd das Programm automatisch. Es bleibt zunächst im
 Zustand `IDLE`; eine Messung beginnt erst durch einen kurzen Tastendruck. Der
-Start bleibt im Zustand `STARTING`, bis Referenz-GNSS und Cellulink-GNSS
-jeweils einen Fix haben und ein einzelner Ping zum konfigurierten Ping-Ziel
-erfolgreich war. Erst danach wechselt die LED auf `RUNNING` und die zyklische
-Messwerterfassung beginnt.
+Start bleibt im Zustand `STARTING`, bis die Mobilfunkschnittstelle per
+Cellulink-API einmal aus- und wieder eingeschaltet wurde, Referenz-GNSS und
+Cellulink-GNSS jeweils einen Fix haben und ein einzelner Ping zum konfigurierten
+Ping-Ziel erfolgreich war. Erst danach wechselt die LED auf `RUNNING` und die
+zyklische Messwerterfassung beginnt.
 
 Der aktuelle Ablauf ist im systemd-Log sichtbar:
 
@@ -369,6 +403,9 @@ Enthalten sind unter anderem:
 - `iperf_results`
 - `error_log`
 - `system_events`
+
+`measurement_runs.sim_config_label` enthält pro Messfahrt nur das aktive
+SIM-Konfigurationslabel, z. B. `K0` oder `K1`; die PIN wird nicht gespeichert.
 
 `system_events` enthält Programm- und Service-Starts, Tasterereignisse,
 Messungsstart und -ende, Shutdown-Anforderungen sowie GPIO-, API-, GNSS-,

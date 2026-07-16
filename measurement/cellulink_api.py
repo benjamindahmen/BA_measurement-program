@@ -38,6 +38,13 @@ class CellulinkApiClient:
             f"/cellular/modems/{self.config.modem_id}/profiles/{self.config.profile_id}/configuration"
         )
 
+    def set_sim_pin(self, pin: str) -> dict[str, Any] | None:
+        return self.request_action(
+            "POST",
+            f"/cellular/modems/{self.config.modem_id}/profiles/{self.config.profile_id}/pin",
+            {"pin": pin},
+        )
+
     def get_modem_configuration(self) -> dict[str, Any]:
         return self.get_json(f"/cellular/modems/{self.config.modem_id}/configuration")
 
