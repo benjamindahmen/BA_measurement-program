@@ -41,6 +41,20 @@ class CellulinkApiClient:
     def get_modem_configuration(self) -> dict[str, Any]:
         return self.get_json(f"/cellular/modems/{self.config.modem_id}/configuration")
 
+    def set_modem_configuration(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        return self.request_action(
+            "PUT",
+            f"/cellular/modems/{self.config.modem_id}/configuration",
+            payload,
+        )
+
+    def set_modem_activated(self, activated: bool) -> dict[str, Any] | None:
+        current = self.get_modem_configuration()
+        payload: dict[str, Any] = {"activated": activated}
+        if "mtu" in current and current["mtu"] not in (None, ""):
+            payload["mtu"] = current["mtu"]
+        return self.set_modem_configuration(payload)
+
     def get_modem_information(self) -> dict[str, Any]:
         return self.get_json(f"/cellular/modems/{self.config.modem_id}/information")
 
@@ -52,20 +66,6 @@ class CellulinkApiClient:
 
     def get_gnss_information(self) -> dict[str, Any]:
         return self.get_json("/gnss")
-
-    def reconnect_cellular_connection(
-        self,
-        path_template: str,
-        method: str = "PUT",
-        action: str = "Relogin",
-    ) -> None:
-        self.request_action(method, path_template, {"connectionCheckAction": action})
-
-    def disconnect_cellular_profile(self, path_template: str, method: str = "POST") -> None:
-        self.request_action(method, path_template)
-
-    def connect_cellular_profile(self, path_template: str, method: str = "POST") -> None:
-        self.request_action(method, path_template)
 
     def request_action(self, method: str, path_template: str, payload: Any = None) -> dict[str, Any] | None:
         path = self._format_path(path_template)

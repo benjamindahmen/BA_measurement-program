@@ -215,7 +215,7 @@ Alle Einstellungen liegen in `config.ini`. Besonders relevant sind:
 - `[Cellulink]`: Routeradresse, Zugangsdaten und TLS-Prüfung
 - `[ReferenceGNSS]`: UART-Port, Baudrate und Timeout
 - `[Measurement]`: SQLite-Pfad und Metadaten der Messfahrt
-- `[Startup]`: Mobilfunk-Neuanmeldung und Startfreigabe
+- `[Startup]`: Startfreigabe
 - `[Ping]` und `[Iperf]`: Netzwerkziele, Intervalle und Timeouts
 - `[GPIO]` und `[StatusLED]`: Pins und Bedienzeiten
 
@@ -226,10 +226,6 @@ Die Startfreigabe wird über `[Startup]` gesteuert:
 
 ```ini
 [Startup]
-CELLULAR_RESET_ENABLED=true
-CELLULAR_RECONNECT_METHOD=PUT
-CELLULAR_RECONNECT_PATH=/cellular/connection-check/action
-CELLULAR_RECONNECT_ACTION=Relogin
 READY_TIMEOUT_S=180.0
 PING_COUNT=1
 ```
@@ -238,11 +234,10 @@ PING_COUNT=1
 
 Nach dem Boot startet systemd das Programm automatisch. Es bleibt zunächst im
 Zustand `IDLE`; eine Messung beginnt erst durch einen kurzen Tastendruck. Der
-Start bleibt im Zustand `STARTING`, bis der Mobilfunk-Reconnect per
-Cellulink-API ausgelöst wurde, Referenz-GNSS und Cellulink-GNSS jeweils einen
-Fix haben und ein einzelner Ping zum konfigurierten Ping-Ziel erfolgreich war.
-Erst danach wechselt die LED auf `RUNNING` und die zyklische Messwerterfassung
-beginnt.
+Start bleibt im Zustand `STARTING`, bis Referenz-GNSS und Cellulink-GNSS
+jeweils einen Fix haben und ein einzelner Ping zum konfigurierten Ping-Ziel
+erfolgreich war. Erst danach wechselt die LED auf `RUNNING` und die zyklische
+Messwerterfassung beginnt.
 
 Der aktuelle Ablauf ist im systemd-Log sichtbar:
 
@@ -298,7 +293,7 @@ Das Menü bietet:
 - nur Taster
 - nur Referenz-GNSS
 - nur Cellulink
-- Cellulink-Reconnect auslösen und beobachten
+- Cellulink-Modemschalter
 - nur Status-LED
 - Referenz-GNSS und Cellulink
 
@@ -325,8 +320,8 @@ python main.py --test --test-hardware gnss --test-seconds 60
 # nur Cellulink-Erreichbarkeit, Login und API-Endpunkte
 python main.py --test --test-hardware cellulink
 
-# Cellulink-Reconnect auslösen und Modem-Konfiguration/Mobilfunkstatus/Ping beobachten
-python main.py --test --test-hardware reconnect --test-seconds 90
+# Cellulink-Modemschalter testen: activated=false, danach activated=true
+python main.py --test --test-hardware modem-toggle --test-seconds 30
 
 # Status-LED gezielt auf einen Zustand setzen
 python main.py --test --test-hardware led --test-led-state RUNNING --test-seconds 10
@@ -342,11 +337,10 @@ gültiger Fix vorliegt und welche Position/Satellitenzahl erkannt wurde.
 Der Cellulink-Test prüft Erreichbarkeit, Login und die relevanten API-Endpunkte.
 Das Passwort und der Access Token werden nicht ausgegeben.
 
-Der Reconnect-Test löst den konfigurierten Cellulink-Reconnect aus und
-beobachtet danach Modem-Konfiguration, Mobilfunkstatus und einen Einzelping zu
-`google.com`. Eine echte Neuverbindung ist typischerweise an einem kurzzeitigen
-Wechsel von `modem_activated`, Ping-Ausfall, Statuswechseln oder geänderten
-Mobilfunkwerten erkennbar.
+Der Modemschalter-Test prüft, ob der WBM-Schalter über
+`PUT /api/v1/cellular/modems/{id}/configuration` mit `activated=false` und
+anschließend `activated=true` gesteuert werden kann. Der Test versucht das Modem
+am Ende immer wieder einzuschalten.
 
 Der LED-Test setzt die Status-LED gezielt auf einen der Zustände `IDLE`,
 `STARTING`, `RUNNING`, `STOPPING` oder `ERROR`. Mit `--test-seconds 0` bleibt

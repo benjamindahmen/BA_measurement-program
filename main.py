@@ -32,7 +32,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--test-hardware",
-        choices=["none", "gnss", "cellulink", "reconnect", "led", "both"],
+        choices=["none", "gnss", "cellulink", "modem-toggle", "led", "both"],
         help="Hardware to test in --test mode; omit for interactive menu",
     )
     parser.add_argument(

@@ -113,11 +113,6 @@ class StatusLedConfig:
 
 @dataclass(frozen=True)
 class StartupConfig:
-    cellular_reset_enabled: bool
-    cellular_reconnect_method: str
-    cellular_reconnect_path: str
-    cellular_reconnect_action: str
-    cellular_reset_settle_s: float
     ready_timeout_s: float
     check_interval_s: float
     ping_count: int
@@ -217,23 +212,6 @@ def load_config(path: str | Path) -> AppConfig:
             gpio=_int(parser.get("StatusLED", "GPIO", fallback="27"), 27),
         ),
         startup=StartupConfig(
-            cellular_reset_enabled=_bool(
-                parser.get("Startup", "CELLULAR_RESET_ENABLED", fallback="true"), True
-            ),
-            cellular_reconnect_method=parser.get(
-                "Startup", "CELLULAR_RECONNECT_METHOD", fallback="PUT"
-            ).upper(),
-            cellular_reconnect_path=parser.get(
-                "Startup",
-                "CELLULAR_RECONNECT_PATH",
-                fallback="/cellular/connection-check/action",
-            ),
-            cellular_reconnect_action=parser.get(
-                "Startup", "CELLULAR_RECONNECT_ACTION", fallback="Relogin"
-            ),
-            cellular_reset_settle_s=_float(
-                parser.get("Startup", "CELLULAR_RESET_SETTLE_S", fallback="5.0"), 5.0
-            ),
             ready_timeout_s=_float(
                 parser.get("Startup", "READY_TIMEOUT_S", fallback="180.0"), 180.0
             ),

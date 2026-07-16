@@ -107,8 +107,6 @@ class MeasurementController:
             access_token = authenticator.login()
             api_client = CellulinkApiClient(self.config.cellulink, access_token)
 
-            self._reset_cellular_connection(api_client)
-
             self._report_status("Starte Referenz-GNSS-Reader")
             self.gnss_reader = ReferenceGnssReader(
                 self.config.reference_gnss.port,
@@ -219,40 +217,6 @@ class MeasurementController:
         self.database.log_error(self.run_id, "reference_gnss", message, details)
         self.database.log_system_event(self.run_id, "GNSS_ERROR", message, details)
         self.logger.error("GNSS-Fehler: %s", message)
-
-    def _reset_cellular_connection(self, api_client: CellulinkApiClient) -> None:
-        if not self.config.startup.cellular_reset_enabled:
-            self._report_status("Mobilfunk-Neuanmeldung ist deaktiviert")
-            return
-        self._report_status("Starte Mobilfunk-Reconnect per Cellulink-API")
-        self.logger.info(
-            "Mobilfunk-Reconnect wird per API ausgelöst: %s %s action=%s",
-            self.config.startup.cellular_reconnect_method,
-            self.config.startup.cellular_reconnect_path,
-            self.config.startup.cellular_reconnect_action,
-        )
-        self.database.log_system_event(
-            self.run_id,
-            "CELLULAR_RESET_STARTED",
-            "Mobilfunk-Reconnect wird per Cellulink-API ausgelöst",
-            {
-                "method": self.config.startup.cellular_reconnect_method,
-                "path": self.config.startup.cellular_reconnect_path,
-                "action": self.config.startup.cellular_reconnect_action,
-            },
-        )
-        api_client.reconnect_cellular_connection(
-            self.config.startup.cellular_reconnect_path,
-            self.config.startup.cellular_reconnect_method,
-            self.config.startup.cellular_reconnect_action,
-        )
-        self._report_status("Warte nach Mobilfunk-Reconnect")
-        time.sleep(max(self.config.startup.cellular_reset_settle_s, 0.0))
-        self.database.log_system_event(
-            self.run_id,
-            "CELLULAR_RESET_FINISHED",
-            "Mobilfunk-Reconnect wurde per Cellulink-API ausgelöst",
-        )
 
     def _wait_until_ready(self, api_client: CellulinkApiClient) -> None:
         deadline = time.monotonic() + max(self.config.startup.ready_timeout_s, 1.0)

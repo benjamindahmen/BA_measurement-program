@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from .models import GnssState
 
 
-HardwareMode = Literal["none", "gnss", "cellulink", "reconnect", "led", "both"]
+HardwareMode = Literal["none", "gnss", "cellulink", "modem-toggle", "led", "both"]
 LedStateName = Literal["IDLE", "STARTING", "RUNNING", "STOPPING", "ERROR"]
 
 
@@ -69,14 +69,14 @@ def run_hardware_test(
             _run_status_loop(options.duration_s, button_probe=button_probe)
             return exit_code
 
+        if options.hardware == "modem-toggle":
+            if not run_cellulink_modem_toggle_test(config, options.duration_s):
+                exit_code = 1
+            return exit_code
+
         if options.hardware in {"cellulink", "both"}:
             if not run_cellulink_test(config):
                 exit_code = 1
-
-        if options.hardware == "reconnect":
-            if not run_cellulink_reconnect_test(config, options.duration_s):
-                exit_code = 1
-            return exit_code
 
         if gnss_probe is not None:
             if not gnss_probe.start():
@@ -317,22 +317,14 @@ def run_cellulink_test(config: AppConfig) -> bool:
     return success
 
 
-def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> bool:
-    from .cellulink_api import CellulinkApiClient, extract_cellular_fields
+def run_cellulink_modem_toggle_test(config: AppConfig, duration_s: int = 30) -> bool:
+    from .cellulink_api import CellulinkApiClient
     from .cellulink_auth import CellulinkAuthenticator
-    from .config import PingConfig
-    from .models import GnssState
-    from .ping_test import run_ping
 
-    duration_s = max(duration_s, 10)
-    print("Cellulink-Reconnect-Test: prüfe, ob der Router eine Mobilfunk-Neuverbindung auslöst ...")
+    timeout_s = max(duration_s, 20)
+    print("Cellulink-Modemschalter-Test: teste activated=false/true auf der Modem-Konfiguration ...")
     print(f"Ziel: {config.cellulink.base_url}")
-    print(
-        "Reconnect-Call: "
-        f"{config.startup.cellular_reconnect_method} "
-        f"{config.startup.cellular_reconnect_path} "
-        f"action={config.startup.cellular_reconnect_action}"
-    )
+    print(f"API-Pfad: /api/v1/cellular/modems/{config.cellulink.modem_id}/configuration")
     try:
         authenticator = CellulinkAuthenticator(config.cellulink)
         authenticator.reachability_check()
@@ -345,117 +337,67 @@ def run_cellulink_reconnect_test(config: AppConfig, duration_s: int = 60) -> boo
         return False
 
     try:
-        before_payload = api_client.get_cellular_status()
-        before_config_payload = api_client.get_modem_configuration()
+        before_config = api_client.get_modem_configuration()
     except Exception as exc:
-        print(f"FEHLER: Mobilfunkstatus/-konfiguration vor Reconnect konnte nicht gelesen werden: {exc}")
+        print(f"FEHLER: Modem-Konfiguration konnte nicht gelesen werden: {exc}")
         return False
 
-    before_fields = extract_cellular_fields(before_payload)
-    before_signature = _cellular_reconnect_signature(before_fields)
-    before_config_fields = _extract_modem_configuration_fields(before_config_payload)
-    before_config_signature = _modem_configuration_signature(before_config_fields)
-    print("Mobilfunkstatus vor Reconnect:")
-    _print_cellular_reconnect_snapshot(before_fields)
-    print("Modem-Konfiguration vor Reconnect:")
-    _print_modem_configuration_snapshot(before_config_fields)
+    before_fields = _extract_modem_configuration_fields(before_config)
+    print("Modem-Konfiguration vor Test:")
+    _print_modem_configuration_snapshot(before_fields)
+
+    off_seen = False
+    on_seen = False
+    toggle_error: Exception | None = None
+    restore_error: Exception | None = None
+    try:
+        print("Setze Modem-Konfiguration: activated=false ...")
+        api_client.set_modem_activated(False)
+        off_seen = _wait_for_modem_activated(
+            api_client,
+            expected=False,
+            timeout_s=min(timeout_s / 2.0, 30.0),
+        )
+        if off_seen:
+            print("OK: API meldet modem_activated=false.")
+        else:
+            print("FEHLER: API meldet innerhalb der Wartezeit kein modem_activated=false.")
+    except Exception as exc:
+        toggle_error = exc
+        print(f"FEHLER: Ausschalten per API fehlgeschlagen: {exc}")
+    finally:
+        try:
+            print("Setze Modem-Konfiguration zurück: activated=true ...")
+            api_client.set_modem_activated(True)
+            on_seen = _wait_for_modem_activated(
+                api_client,
+                expected=True,
+                timeout_s=min(timeout_s / 2.0, 30.0),
+            )
+            if on_seen:
+                print("OK: API meldet modem_activated=true.")
+            else:
+                print("FEHLER: API meldet innerhalb der Wartezeit kein modem_activated=true.")
+        except Exception as exc:
+            restore_error = exc
+            print(f"KRITISCH: Wiedereinschalten per API fehlgeschlagen: {exc}")
+            print("Bitte Modem im WBM manuell wieder einschalten.")
 
     try:
-        api_client.reconnect_cellular_connection(
-            config.startup.cellular_reconnect_path,
-            config.startup.cellular_reconnect_method,
-            config.startup.cellular_reconnect_action,
-        )
+        after_fields = _extract_modem_configuration_fields(api_client.get_modem_configuration())
+        print("Modem-Konfiguration nach Test:")
+        _print_modem_configuration_snapshot(after_fields)
     except Exception as exc:
-        print(f"FEHLER: Reconnect-API-Call fehlgeschlagen: {exc}")
+        print(f"HINWEIS: Abschluss-Konfiguration konnte nicht gelesen werden: {exc}")
+
+    if restore_error is not None:
         return False
-
-    print("OK: Reconnect-API-Call wurde vom Router angenommen.")
-    print(f"Beobachte jetzt {duration_s} s lang Modem-Konfiguration, Mobilfunkstatus und Ping zu google.com ...")
-
-    ping_config = PingConfig(
-        enabled=True,
-        target="google.com",
-        interval_s=1.0,
-        count=1,
-        timeout_s=2,
-    )
-    dummy_gnss = GnssState()
-    status_changed = False
-    modem_configuration_changed = False
-    activated_toggled = False
-    ping_failed = False
-    ping_recovered_after_failure = False
-    last_fields = before_fields
-    last_config_fields = before_config_fields
-    start = time.monotonic()
-    next_poll = start
-
-    while time.monotonic() - start < duration_s:
-        now = time.monotonic()
-        if now < next_poll:
-            time.sleep(min(next_poll - now, 0.2))
-            continue
-        elapsed_s = int(now - start)
-        try:
-            current_config_payload = api_client.get_modem_configuration()
-            last_config_fields = _extract_modem_configuration_fields(current_config_payload)
-            current_config_signature = _modem_configuration_signature(last_config_fields)
-            if current_config_signature != before_config_signature:
-                modem_configuration_changed = True
-            if last_config_fields.get("modem_activated") != before_config_fields.get("modem_activated"):
-                activated_toggled = True
-            print(f"[{elapsed_s:>3}s] Modem-Konfiguration:")
-            _print_modem_configuration_snapshot(last_config_fields, prefix="    ")
-
-            current_payload = api_client.get_cellular_status()
-            last_fields = extract_cellular_fields(current_payload)
-            current_signature = _cellular_reconnect_signature(last_fields)
-            if current_signature != before_signature:
-                status_changed = True
-            print(f"[{elapsed_s:>3}s] Mobilfunkstatus:")
-            _print_cellular_reconnect_snapshot(last_fields, prefix="    ")
-        except Exception as exc:
-            status_changed = True
-            modem_configuration_changed = True
-            print(f"[{elapsed_s:>3}s] Modem-Konfiguration/Mobilfunkstatus konnte nicht gelesen werden: {exc}")
-
-        ping_result = run_ping(ping_config, dummy_gnss)
-        ping_ok = bool(ping_result.get("success"))
-        if not ping_ok:
-            ping_failed = True
-        elif ping_failed:
-            ping_recovered_after_failure = True
-        print(f"      Ping: {_format_reconnect_ping(ping_result)}")
-        next_poll = time.monotonic() + 1.0
-
-    print("Modem-Konfiguration nach Beobachtungsfenster:")
-    _print_modem_configuration_snapshot(last_config_fields)
-    print("Mobilfunkstatus nach Beobachtungsfenster:")
-    _print_cellular_reconnect_snapshot(last_fields)
-    print("Auswertung:")
-    if activated_toggled:
-        print("  OK: modem_activated hat während des Tests den Zustand gewechselt.")
-    elif modem_configuration_changed:
-        print("  OK: Modem-Konfiguration hat sich während des Tests verändert.")
-    else:
-        print("  HINWEIS: Modem-Konfiguration blieb während des Tests gleich.")
-    if status_changed:
-        print("  OK: Mobilfunkstatus hat sich während des Tests verändert.")
-    else:
-        print("  HINWEIS: Mobilfunkstatus blieb während des Tests gleich.")
-    if ping_failed and ping_recovered_after_failure:
-        print("  OK: Ping war kurz gestört und danach wieder erfolgreich.")
-    elif ping_failed:
-        print("  HINWEIS: Ping war gestört, hat sich im Beobachtungsfenster aber nicht sicher erholt.")
-    else:
-        print("  HINWEIS: Ping blieb durchgehend erfolgreich.")
-
-    if activated_toggled or modem_configuration_changed or status_changed or ping_failed:
-        print("Bewertung: Es gibt Hinweise auf eine echte Mobilfunk-Neuverbindung.")
+    if toggle_error is not None:
+        return False
+    if off_seen and on_seen:
+        print("Bewertung: Modemschalter-API bestätigt. activated konnte aus- und wieder eingeschaltet werden.")
         return True
-    print("Bewertung: Nicht eindeutig. Der API-Call wurde angenommen, aber eine Neuverbindung war nicht sichtbar.")
-    print("Tipp: Test mit längerer Dauer wiederholen, z. B. --test-seconds 90.")
+    print("Bewertung: Modemschalter-API nicht bestätigt.")
     return False
 
 
@@ -523,7 +465,7 @@ def _interactive_options(
     print("  2  nur Taster")
     print("  3  nur Referenz-GNSS")
     print("  4  nur Cellulink")
-    print("  5  Cellulink-Reconnect auslösen und beobachten")
+    print("  5  Cellulink-Modemschalter")
     print("  6  nur Status-LED")
     print("  7  Referenz-GNSS und Cellulink")
     choice = input("Auswahl [1]: ").strip() or "1"
@@ -533,7 +475,7 @@ def _interactive_options(
         "2": ("none", True),
         "3": ("gnss", False),
         "4": ("cellulink", False),
-        "5": ("reconnect", False),
+        "5": ("modem-toggle", False),
         "6": ("led", False),
         "7": ("both", False),
     }
@@ -555,7 +497,7 @@ def _interactive_options(
 
 
 def _validate_hardware(value: str) -> HardwareMode:
-    if value not in {"none", "gnss", "cellulink", "reconnect", "led", "both"}:
+    if value not in {"none", "gnss", "cellulink", "modem-toggle", "led", "both"}:
         raise ValueError(f"Unbekannter Hardwaremodus: {value}")
     return value  # type: ignore[return-value]
 
@@ -630,69 +572,47 @@ def _print_selected(data: dict, keys: list[str]) -> None:
         print(f"  {key}: {data.get(key)}")
 
 
-def _cellular_reconnect_signature(fields: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(
-        fields.get(key)
-        for key in [
-            "cellular_registration_status",
-            "cellular_packet_data_online",
-            "cellular_technology",
-            "cellular_frequency_band",
-            "cellular_cell_id",
-        ]
-    )
-
-
 def _extract_modem_configuration_fields(payload: dict[str, Any]) -> dict[str, Any]:
     from .models import deep_first_existing, to_int
 
-    activated = deep_first_existing(payload, ["activated"])
     return {
-        "modem_activated": activated,
+        "modem_activated": deep_first_existing(payload, ["activated"]),
         "modem_mtu": to_int(deep_first_existing(payload, ["mtu"])),
     }
 
 
-def _modem_configuration_signature(fields: dict[str, Any]) -> tuple[Any, ...]:
-    return tuple(
-        fields.get(key)
-        for key in [
-            "modem_activated",
-            "modem_mtu",
-        ]
-    )
-
-
 def _print_modem_configuration_snapshot(fields: dict[str, Any], prefix: str = "  ") -> None:
-    for key in [
-        "modem_activated",
-        "modem_mtu",
-    ]:
+    for key in ["modem_activated", "modem_mtu"]:
         print(f"{prefix}{key}: {fields.get(key)}")
 
 
-def _print_cellular_reconnect_snapshot(fields: dict[str, Any], prefix: str = "  ") -> None:
-    for key in [
-        "cellular_registration_status",
-        "cellular_packet_data_online",
-        "cellular_technology",
-        "cellular_frequency_band",
-        "cellular_cell_id",
-        "cellular_rsrp",
-        "cellular_rsrq",
-        "cellular_rssi",
-        "cellular_sinr",
-    ]:
-        print(f"{prefix}{key}: {fields.get(key)}")
+def _normalize_boolish(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if value == 0:
+            return False
+        if value == 1:
+            return True
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "ja", "on", "enabled", "active"}:
+            return True
+        if normalized in {"false", "0", "no", "nein", "off", "disabled", "inactive"}:
+            return False
+    return None
 
 
-def _format_reconnect_ping(result: dict[str, Any]) -> str:
-    success = bool(result.get("success"))
-    received = result.get("received")
-    transmitted = result.get("transmitted")
-    loss = result.get("packet_loss_percent")
-    rtt_avg = result.get("rtt_avg_ms")
-    if success:
-        return f"OK received={received}/{transmitted}, loss={loss}%, rtt_avg={rtt_avg} ms"
-    error = result.get("error_text") or "nicht erfolgreich"
-    return f"FEHLER received={received}/{transmitted}, loss={loss}%, error={error}"
+def _wait_for_modem_activated(api_client: Any, expected: bool, timeout_s: float) -> bool:
+    deadline = time.monotonic() + max(timeout_s, 1.0)
+    while time.monotonic() < deadline:
+        try:
+            fields = _extract_modem_configuration_fields(api_client.get_modem_configuration())
+            _print_modem_configuration_snapshot(fields, prefix="    ")
+            current = _normalize_boolish(fields.get("modem_activated"))
+            if current is expected:
+                return True
+        except Exception as exc:
+            print(f"    Modem-Konfiguration konnte nicht gelesen werden: {exc}")
+        time.sleep(1.0)
+    return False
