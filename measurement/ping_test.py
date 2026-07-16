@@ -34,7 +34,7 @@ def run_ping(
     try:
         completed = run_cancellable(
             command,
-            timeout=config.timeout_s * max(config.count, 1) + 5,
+            timeout_s=config.timeout_s * max(config.count, 1) + 5,
             stop_event=stop_event,
         )
         raw_output = (completed.stdout or "") + (completed.stderr or "")

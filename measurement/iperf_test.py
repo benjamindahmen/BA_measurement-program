@@ -60,7 +60,7 @@ def _run_single(
     try:
         completed = run_cancellable(
             command,
-            timeout=config.timeout_s,
+            timeout_s=config.timeout_s,
             stop_event=stop_event,
         )
         result["timestamp_system_utc_end"] = utc_now_iso()
